@@ -128,7 +128,7 @@ def link(
             return
         for entry in changed:
             verb = "would add" if dry_run and entry["action"] == "added" else entry["action"]
-            console.print(f"{entry['article']}: {verb} {entry['link']}")
+            console.print(f"{entry['article']}: {verb} {entry['link']}", markup=False, highlight=False)
         if dry_run and any(entry["action"] == "added" for entry in changed):
             console.print("[bold]Pass --no-dry-run to do it.[/bold]")
 

@@ -251,7 +251,7 @@ the vault instead of holding the file.
 
 ## 8. The capture rule — update, don't duplicate
 
-> Before writing anything to the knowledge base, search `_index.md` and the vault for an
+> Before writing anything to the knowledge base, search the vault (`kb search`) for an
 > existing article on the subject. If one exists, **update it** and bump `last_updated` — do
 > not create a second article covering the same thing. Create a new article only when
 > nothing covers it, and add `related:` links both ways. A single conversation often

@@ -31,17 +31,22 @@ new article, what existing article did this session prove incomplete, ambiguous,
 piece of work that produces a new incident article has usually also exposed a claim in a
 system article that was stated without its version or its date. Touch both.
 
+**`kb search` is how you do this.** It reports each candidate's title, summary, type and
+whether it is active, ranked by *where* the terms appear — a term in a title or `systems:`
+entry means the article is about the subject; the same term in the body may be a passing
+mention. That is enough to decide update-vs-create without opening any files.
+
 Searching by the exact words the user just used is not enough — the existing article may use
-different vocabulary. Search the index summaries, then grep the vault for the systems, repos
-and identifiers involved.
+different vocabulary. Search the systems, repos and identifiers involved as well, and read
+the summaries of everything that comes back.
 
 ---
 
 ## Flow
 
-1. **Read `_index.md` first.** `kb index --json` reports the counts; the file itself is at the
-   vault root and is the catalog. Then grep the vault for the systems and identifiers this
-   session touched.
+1. **Search before anything else.** `kb search <terms> --json` for the subject, then again
+   for the systems, repos and identifiers involved. `_index.md` at the vault root is the
+   full catalog if you need to browse rather than search.
 2. **Decide update-vs-create**, per the rule above. Name out loud which articles you are going
    to touch and why, before writing anything.
 3. **Classify anything you are adopting from disk** — see *Adopting an existing document*
@@ -107,7 +112,8 @@ kb adopt inspect path/to/doc.md --search ~/some/other/tree     # an additional p
 ```
 
 It reports whether the document names the repo it is sitting in, whether that repo's own
-`CLAUDE.md` or `README.md` lists it, which relative links it contains, and what points at it.
+`CLAUDE.md` or `README.md` lists it, whether git tracks it, which relative links it contains
+— **including the ones that are already broken** — and what points at it.
 It searches the enclosing repo **and** the configured repo root, because the reference that
 matters most is usually the one from a different repo — that is the one that breaks silently.
 
@@ -120,9 +126,16 @@ line before believing it.
 | What it is | Signal | What to do |
 |---|---|---|
 | **Raw** — notes, a transcript, scraps | No structure, no audience | Absorb it into an article |
-| **Finished, rightfully located** | Names its own repo; the repo lists it as project documentation | `kb adopt point` — a stub, nothing moves |
-| **Finished, homeless** | Never names its own repo; the repo does not list it | `kb adopt move` |
+| **Finished, rightfully located** | Names its own repo in prose; the repo lists it; the repo tracks it | `kb adopt point` — a stub, nothing moves |
+| **Finished, homeless** | Never names its own repo; not listed; often **not tracked by git** | `kb adopt move` |
 | **Active state** | A workflow reads *and writes* it every run | `kb adopt move --status active --to learning` |
+
+**`tracked_by_git: false` is the strongest single signal.** A repository that does not track
+a document is not claiming it, and that document has no history and no backup — moving it
+into the vault is a rescue, not a reorganisation. Say so when you report it.
+
+`names_own_repo` counts prose only; a repo name inside a code block or backticks is a
+dependency coordinate, not the document claiming ownership.
 
 **The test: is the location meaningful?** A document under a service's `docs/` is there because
 it documents that service, so it stays. A document in a scratch directory is there because
@@ -142,12 +155,19 @@ reads as general material is a real judgment call, not a coin flip.
 After a move, add a line to the source repo's `CLAUDE.md` naming the new location. The repo
 points out to the vault instead of holding the file.
 
+**If the source directory is being deleted, that pointer is worthless — check what lives
+only there first.** A folder's own index or conventions file routinely holds content that
+exists nowhere else: which repo owns which spec, the standing assumptions a playbook was
+written against, canonical commit references. Read it before it goes, and fold whatever is
+load-bearing into an article. Both adoption runs so far turned up exactly this.
+
 ---
 
 ## Command shapes
 
 ```bash
 # read
+kb search <terms> --json            # which articles already cover this — run this first
 kb index --json                     # rebuild and report counts
 kb lint --json                      # findings, with file:line
 kb schema                           # the full rules
@@ -175,7 +195,18 @@ kb adopt point path/to/doc.md --title "..." --summary "..." --repo some-service 
 kb adopt move  path/to/doc.md --to runbooks --title "..." --summary "..." --no-dry-run
 kb adopt move  path/to/doc.md --to runbooks --source symlink --no-dry-run   # has inbound refs
 kb adopt move  path/to/doc.md --to learning --status active --no-dry-run    # live state
+
+# several at once — one JSON object per document, same keys as the options
+kb adopt move --from-file /tmp/moves.json --no-dry-run
 ```
+
+**Use `--from-file` for more than two documents.** Ten options on one command line is
+error-prone for a single file and unbearable across a directory. The keys are `path`, `to`,
+`title`, `summary`, `type`, `status`, `slug`, `created`, `repos`, `systems`, `tickets`,
+`related`, `note`, `source`.
+
+`adopt move` refuses to remove a file an editor still has open, because saving from that
+buffer afterwards would write the old copy back to a path that no longer exists.
 
 If the vault is missing a directory the article needs, `kb init` creates the missing ones
 and leaves everything else alone.

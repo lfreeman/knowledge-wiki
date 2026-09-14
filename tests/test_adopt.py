@@ -247,7 +247,8 @@ def test_move_json_reports_the_links_it_rewrote(repo: Path, vault: Path) -> None
         runner.invoke(app, ["adopt", "move", str(doc), "--to", "runbooks", "--summary", "S", "--json"]).output
     )
     assert payload["dry_run"] is True
-    assert [reference["path"] for reference in payload["links_absolutised"]] == ["other.md"]
+    (plan,) = payload["moves"]
+    assert [reference["path"] for reference in plan["links_absolutised"]] == ["other.md"]
 
 
 def test_inspect_searches_the_configured_repo_root_not_just_the_enclosing_repo(
@@ -335,3 +336,207 @@ def test_move_rejects_a_created_date_it_cannot_parse(repo: Path, vault: Path) ->
     )
     assert result.exit_code == 1
     assert doc.exists()
+
+
+# --- batch input, and the guards around removing a source ---
+
+
+def test_move_from_file_moves_several_documents(repo: Path, vault: Path, tmp_path: Path) -> None:
+    for name in ("one.md", "two.md"):
+        (repo / "docs" / name).write_text(f"# {name}\n\nBody.\n", encoding="utf-8")
+    spec = tmp_path / "moves.json"
+    spec.write_text(
+        json.dumps(
+            [
+                {"path": str(repo / "docs" / "one.md"), "to": "runbooks", "summary": "First.", "slug": "one"},
+                {"path": str(repo / "docs" / "two.md"), "to": "guides", "summary": "Second.", "slug": "two"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["adopt", "move", "--from-file", str(spec), "--no-dry-run"])
+    assert result.exit_code == 0
+    assert schema.parse_article(vault / "runbooks" / "one.md", vault).summary == "First."
+    assert schema.parse_article(vault / "guides" / "two.md", vault).summary == "Second."
+    assert not (repo / "docs" / "one.md").exists()
+
+
+def test_move_from_file_carries_every_field(repo: Path, vault: Path, tmp_path: Path) -> None:
+    (repo / "docs" / "one.md").write_text("# One\n", encoding="utf-8")
+    spec = tmp_path / "moves.json"
+    spec.write_text(
+        json.dumps(
+            [
+                {
+                    "path": str(repo / "docs" / "one.md"),
+                    "to": "learning",
+                    "slug": "a-plan",
+                    "title": "A Plan",
+                    "summary": "What it is.",
+                    "status": "active",
+                    "created": "2026-05-11",
+                    "repos": ["some-service"],
+                    "systems": ["Alpha"],
+                    "tickets": ["PROJ-1"],
+                    "source": "keep",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner.invoke(app, ["adopt", "move", "--from-file", str(spec), "--no-dry-run"])
+    parsed = schema.parse_article(vault / "learning" / "a-plan.md", vault)
+    assert parsed.title == "A Plan"
+    assert parsed.is_active
+    assert parsed.list_field("repos") == ["some-service"]
+    assert parsed.date_field("created") == date(2026, 5, 11)
+    assert (repo / "docs" / "one.md").exists()
+
+
+def test_move_from_file_is_a_preview_by_default(repo: Path, vault: Path, tmp_path: Path) -> None:
+    (repo / "docs" / "one.md").write_text("# One\n", encoding="utf-8")
+    spec = tmp_path / "moves.json"
+    spec.write_text(json.dumps([{"path": str(repo / "docs" / "one.md"), "to": "guides", "summary": "S"}]), "utf-8")
+    runner.invoke(app, ["adopt", "move", "--from-file", str(spec)])
+    assert (repo / "docs" / "one.md").exists()
+    assert not (vault / "guides" / "one.md").exists()
+
+
+def test_move_rejects_a_path_and_a_batch_file_together(repo: Path, vault: Path, tmp_path: Path) -> None:
+    doc = repo / "docs" / "one.md"
+    doc.write_text("# One\n", encoding="utf-8")
+    spec = tmp_path / "moves.json"
+    spec.write_text(json.dumps([{"path": str(doc), "to": "guides", "summary": "S"}]), encoding="utf-8")
+    result = runner.invoke(app, ["adopt", "move", str(doc), "--to", "guides", "--from-file", str(spec)])
+    assert result.exit_code == 1
+
+
+def test_move_rejects_a_batch_file_that_is_not_a_json_array(vault: Path, tmp_path: Path) -> None:
+    spec = tmp_path / "moves.json"
+    spec.write_text('{"path": "x"}', encoding="utf-8")
+    assert runner.invoke(app, ["adopt", "move", "--from-file", str(spec)]).exit_code == 1
+
+
+def test_move_refuses_a_file_an_editor_has_open(repo: Path, vault: Path) -> None:
+    # A move deletes the original. Saving from a still-open buffer afterwards writes the
+    # old copy back to a path that no longer exists, and the vault copy never sees it.
+    doc = repo / "docs" / "open.md"
+    doc.write_text("# Open\n", encoding="utf-8")
+    (repo / "docs" / ".open.md.swp").write_bytes(b"vim swap")
+    result = runner.invoke(app, ["adopt", "move", str(doc), "--to", "guides", "--summary", "S", "--no-dry-run"])
+    assert result.exit_code == 1
+    assert doc.exists()
+    assert not (vault / "guides" / "open.md").exists()
+
+
+def test_keeping_the_source_is_allowed_while_an_editor_has_it_open(repo: Path, vault: Path) -> None:
+    doc = repo / "docs" / "open.md"
+    doc.write_text("# Open\n", encoding="utf-8")
+    (repo / "docs" / ".open.md.swp").write_bytes(b"vim swap")
+    result = runner.invoke(
+        app, ["adopt", "move", str(doc), "--to", "guides", "--summary", "S", "--source", "keep", "--no-dry-run"]
+    )
+    assert result.exit_code == 0
+    assert doc.exists()
+    assert (vault / "guides" / "open.md").exists()
+
+
+# --- the two signals that were wrong or missing on the real corpus ---
+
+
+def test_a_repo_name_inside_a_code_block_is_not_the_document_claiming_it(repo: Path) -> None:
+    # A real 1,181-line guide's only mention of its repo was a dependency coordinate in an
+    # XML sample. inspect called it owned; it was a general guide that belonged elsewhere.
+    doc = repo / "docs" / "guide.md"
+    doc.write_text(
+        "# A General Guide\n\nApplies to every service.\n\n"
+        "```xml\n<artifactId>some-service-integration</artifactId>\n```\n",
+        encoding="utf-8",
+    )
+    assert examine(doc).names_own_repo is False
+
+
+def test_a_repo_name_in_inline_code_is_also_not_a_claim(repo: Path) -> None:
+    doc = repo / "docs" / "guide.md"
+    doc.write_text("# A General Guide\n\nAdd `some-service` to the list.\n", encoding="utf-8")
+    assert examine(doc).names_own_repo is False
+
+
+def test_a_repo_name_in_prose_still_counts(repo: Path) -> None:
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n\nThis describes how some-service handles requests.\n", encoding="utf-8")
+    assert examine(doc).names_own_repo is True
+
+
+def test_inspect_reports_an_untracked_document(repo: Path) -> None:
+    # The decisive signal on a real corpus: a repo that does not track a document is not
+    # claiming it, and the document has no history and no backup.
+    doc = repo / "docs" / "notes.md"
+    doc.write_text("# Notes\n", encoding="utf-8")
+    assert examine(doc).tracked_by_git is False
+
+
+def test_inspect_reports_a_tracked_document(repo: Path) -> None:
+    doc = repo / "docs" / "notes.md"
+    doc.write_text("# Notes\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/notes.md"], cwd=repo, check=True)
+    assert examine(doc).tracked_by_git is True
+
+
+def test_tracked_by_git_is_unknown_outside_a_repository(tmp_path: Path) -> None:
+    doc = tmp_path / "loose.md"
+    doc.write_text("# Loose\n", encoding="utf-8")
+    assert examine(doc).tracked_by_git is None
+
+
+def test_inspect_reports_a_relative_reference_that_is_already_broken(repo: Path) -> None:
+    # The case step 3 exists to catch, and the one the old version could never report:
+    # it only ever listed links that already resolved.
+    (repo / "docs" / "real.md").write_text("# Real\n", encoding="utf-8")
+    doc = repo / "docs" / "design.md"
+    doc.write_text("See [Real](real.md) and [Gone](vanished.md).\n", encoding="utf-8")
+    result = examine(doc)
+    assert [r.path for r in result.outbound_relative] == ["real.md"]
+    assert [r.path for r in result.outbound_broken] == ["vanished.md"]
+
+
+def test_inspect_sees_a_backticked_relative_path(repo: Path) -> None:
+    # One real document referenced its companion as `../findings.md`, in backticks rather
+    # than as a markdown link, and was therefore invisible to the outbound check.
+    doc = repo / "docs" / "design.md"
+    doc.write_text("Companion to `../findings.md`.\n", encoding="utf-8")
+    assert [r.path for r in examine(doc).outbound_broken] == ["../findings.md"]
+
+
+def test_a_backticked_path_that_resolves_is_not_reported_as_broken(repo: Path) -> None:
+    (repo / "docs" / "real.md").write_text("# Real\n", encoding="utf-8")
+    doc = repo / "docs" / "design.md"
+    doc.write_text("Companion to `./real.md`.\n", encoding="utf-8")
+    assert examine(doc).outbound_broken == []
+    assert [r.path for r in examine(doc).outbound_relative] == ["./real.md"]
+
+
+def test_a_backticked_bare_filename_is_not_treated_as_a_path(repo: Path) -> None:
+    # Articles name files constantly — `CLAUDE.md`, `pom.xml` — without meaning "the file
+    # beside me". Requiring a slash keeps those out of the broken-reference list.
+    doc = repo / "docs" / "design.md"
+    doc.write_text("Version properties live in `pom.xml`, and `CLAUDE.md` lists the docs.\n", encoding="utf-8")
+    assert examine(doc).outbound_broken == []
+
+
+def test_absolute_and_url_targets_are_never_called_broken(repo: Path) -> None:
+    doc = repo / "docs" / "design.md"
+    doc.write_text(
+        "See [Web](https://example.com), `/permits/rates`, `~/notes.md` and [Anchor](#section).\n",
+        encoding="utf-8",
+    )
+    assert examine(doc).outbound_broken == []
+
+
+def test_inspect_omits_repo_findings_for_a_file_outside_any_repository(tmp_path: Path) -> None:
+    doc = tmp_path / "loose.md"
+    doc.write_text("# Loose\n", encoding="utf-8")
+    result = runner.invoke(app, ["adopt", "inspect", str(doc)])
+    assert result.exit_code == 0
+    assert "listed in" not in result.output
+    assert "not inside a git repository" in result.output

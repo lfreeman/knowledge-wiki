@@ -121,3 +121,27 @@ def test_the_type_vocabulary_matches_the_shipped_schema_document() -> None:
         assert value in text, f"SCHEMA.md does not mention the {value} type"
     for name in schema.REQUIRED_FIELDS:
         assert name in text, f"SCHEMA.md does not mention the required field {name}"
+
+
+def test_bash_test_syntax_in_a_code_block_is_not_a_wikilink() -> None:
+    # `[[ ... ]]` is bash's test syntax. A shell snippet in a runbook otherwise reads as a
+    # broken wikilink, and one real runbook produced a lint error for exactly this line.
+    body = '```bash\nfor p in 1 2; do\n  [[ "$p" == "1" ]] && continue\ndone\n```\n'
+    assert schema.wikilinks(body) == []
+
+
+def test_a_wikilink_in_an_inline_code_span_is_not_a_link() -> None:
+    assert schema.wikilinks("Always write `[[path/slug|Title]]`, never `[[Title]]`.") == []
+
+
+def test_a_wikilink_in_an_indented_block_is_not_a_link() -> None:
+    assert schema.wikilinks("Example:\n\n    [[ -f file ]] && echo yes\n") == []
+
+
+def test_a_real_wikilink_beside_a_code_block_still_counts() -> None:
+    body = 'See [[runbooks/a|A]].\n\n```bash\n[[ "$x" == "1" ]]\n```\n\nAnd [[systems/b|B]].\n'
+    assert [link.target for link in schema.wikilinks(body)] == ["runbooks/a", "systems/b"]
+
+
+def test_a_tilde_fenced_block_is_skipped_too() -> None:
+    assert schema.wikilinks('~~~sh\n[[ "$p" == "1" ]]\n~~~\n') == []

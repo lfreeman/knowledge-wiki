@@ -75,24 +75,27 @@ def lint(
                 }
             )
         else:
-            _render(findings, len(errors))
+            _render(findings, len(errors), vault)
         if errors:
             raise typer.Exit(1)
 
 
-def _render(findings: list[Finding], errors: int) -> None:
+def _render(findings: list[Finding], errors: int, vault: Path) -> None:
     """One line per finding, in `file:line: severity: rule: detail` form.
 
     Deliberately not a table: a table folds a long path across three rows at terminal
-    width, and a folded `path:line` is no longer something a terminal will open.
+    width, and a folded `path:line` is no longer something a terminal will open. The path
+    is absolute for the same reason — a relative one is not resolvable from wherever the
+    shell happens to be, so the terminal guesses it is a URL and opens a browser.
     """
     if not findings:
         console.print("[green]Clean.[/green] No findings.")
         return
     for finding in findings:
         style = _STYLES[finding.severity]
+        where = f"{vault / finding.path}" + (f":{finding.line}" if finding.line else "")
         console.print(
-            f"[cyan]{finding.location}[/cyan]: [{style}]{finding.severity}[/{style}]: "
+            f"[cyan]{where}[/cyan]: [{style}]{finding.severity}[/{style}]: "
             f"[dim]{finding.rule}[/dim]: {finding.detail}",
             highlight=False,
         )

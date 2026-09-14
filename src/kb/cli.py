@@ -9,6 +9,7 @@ from .commands import adopt, article, doctor, schema_cmd, skill
 from .commands import index as index_cmd
 from .commands import init as init_cmd
 from .commands import lint as lint_cmd
+from .commands import search as search_cmd
 
 EPILOG = (
     f"Config: {config.config_file()}    Vault: {config.load_config().vault}\n\n"
@@ -26,6 +27,7 @@ app = typer.Typer(
 # a group that would read as `kb index index`.
 app.command("index", rich_help_panel="Common")(index_cmd.index)
 app.command("lint", rich_help_panel="Common")(lint_cmd.lint)
+app.command("search", rich_help_panel="Common")(search_cmd.search)
 app.command("schema", rich_help_panel="Common")(schema_cmd.schema)
 app.add_typer(article.app, name="article", rich_help_panel="Common")
 app.add_typer(adopt.app, name="adopt", rich_help_panel="Common")

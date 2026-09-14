@@ -158,12 +158,24 @@ class Article:
 def wikilinks(text: str, line: int | None = None, line_offset: int = 0) -> list[WikiLink]:
     """Every `[[...]]` in `text`, with its line number and table context.
 
+    Code is skipped — fenced blocks, indented blocks, and inline spans. `[[ ... ]]` is
+    also bash's test syntax, so a shell snippet inside a runbook otherwise reads as a
+    broken wikilink; one real runbook produced a lint error for `[[ "$p" == "1" ]]`.
+
     `line` pins every result to one line number, for text that did not come from the
     body (a `related:` entry). `line_offset` shifts body line numbers so they point at
     the real position in the file.
     """
     results: list[WikiLink] = []
-    for number, content in enumerate(text.splitlines(), start=1):
+    fenced = False
+    for number, raw in enumerate(text.splitlines(), start=1):
+        stripped = raw.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fenced = not fenced
+            continue
+        if fenced or raw.startswith("    ") or raw.startswith("\t"):
+            continue
+        content = re.sub(r"`[^`]*`", "", raw)
         in_table_row = content.lstrip().startswith("|")
         for match in _WIKILINK.finditer(content):
             inner = match.group("inner")

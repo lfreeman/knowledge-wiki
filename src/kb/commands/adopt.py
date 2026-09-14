@@ -16,7 +16,9 @@ a month. Having a command do the grep makes skipping it the harder path.
 Both writing verbs are dry-run by default.
 """
 
+import json
 import re
+import subprocess
 from dataclasses import asdict, dataclass
 from datetime import date
 from enum import StrEnum
@@ -47,6 +49,9 @@ _MD_LINK = re.compile(r"\[(?P<text>[^\]]*)\]\((?P<target>[^)\s]+)(?P<title>\s+\"
 #: Link targets that are already unambiguous from anywhere.
 _ABSOLUTE = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|/|~|#)")
 
+#: A relative path written in backticks rather than as a markdown link, e.g. `../notes.md`.
+_BACKTICKED_PATH = re.compile(r"`(?P<path>\.{0,2}/[^`\s]+|[\w.-]+/[^`\s]+\.\w{1,5})`")
+
 _MAX_INBOUND = 200
 
 
@@ -73,9 +78,11 @@ class Inspection:
     names_own_repo: bool
     listed_in_repo_docs: list[str]
     outbound_relative: list[Reference]
+    outbound_broken: list[Reference]
     inbound: list[Reference]
     searched: list[str]
     ambiguous_name: bool
+    tracked_by_git: bool | None
 
 
 @app.command()
@@ -108,6 +115,7 @@ def examine(path: Path, extra_roots: list[Path] | None = None) -> Inspection:
     # searching only the enclosing repo once missed both real inbound references.
     roots = _dedupe([root for root in [repo, config.load_config().repo_root, *(extra_roots or [])] if root])
     inbound = _inbound(path, roots)
+    resolves, broken = _outbound(path, text)
     return Inspection(
         path=str(path),
         exists=True,
@@ -116,13 +124,56 @@ def examine(path: Path, extra_roots: list[Path] | None = None) -> Inspection:
         has_frontmatter=text.startswith("---"),
         repo=str(repo) if repo else None,
         repo_name=repo_name,
-        names_own_repo=repo_name is not None and repo_name in text,
+        names_own_repo=repo_name is not None and repo_name in _prose(text),
         listed_in_repo_docs=_listed_in_repo_docs(path, repo),
-        outbound_relative=_outbound(path, text),
+        outbound_relative=resolves,
+        outbound_broken=broken,
         inbound=inbound,
         searched=[str(root) for root in roots],
         ambiguous_name=_is_common_name(path, roots),
+        tracked_by_git=_tracked_by_git(path, repo),
     )
+
+
+def _prose(text: str) -> str:
+    """The document with code stripped out.
+
+    `names_own_repo` asks whether the document *says* it is about the repo it sits in. A
+    dependency coordinate in an XML sample is not that claim — one real document's only
+    mention of its repo was `<artifactId>some-service-integration</artifactId>` inside a
+    fenced block, and the heuristic called it owned when it was not.
+    """
+    kept: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```") or line.lstrip().startswith("~~~"):
+            fenced = not fenced
+            continue
+        if fenced or line.startswith("    ") or line.startswith("\t"):
+            continue
+        kept.append(re.sub(r"`[^`]*`", "", line))
+    return "\n".join(kept)
+
+
+def _tracked_by_git(path: Path, repo: Path | None) -> bool | None:
+    """Whether the enclosing repository tracks this file. None when there is no repository.
+
+    The strongest mechanical signal there is. A repository that does not track a document
+    is not claiming it — and an untracked document has no history and no backup, which
+    makes moving it into the vault a rescue rather than a reorganisation.
+    """
+    if repo is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "--error-unmatch", str(path.resolve())],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.returncode == 0
 
 
 def _dedupe(roots: list[Path]) -> list[Path]:
@@ -191,22 +242,29 @@ def _listed_in_repo_docs(path: Path, repo: Path | None) -> list[str]:
     return found
 
 
-def _outbound(path: Path, text: str) -> list[Reference]:
-    """Relative markdown links that resolve to a real file next to this document.
+def _outbound(path: Path, text: str) -> tuple[list[Reference], list[Reference]]:
+    """Relative paths this document points at, split into those that resolve and those that do not.
 
-    Only links that actually resolve are reported. A link whose target does not exist
-    was never a path into this repository, and rewriting it would be vandalism.
+    Both halves matter and for opposite reasons. A link that resolves becomes meaningless
+    once the document moves, so it has to be absolutised. A link that does *not* resolve
+    is already broken — which is the thing step 3 exists to catch, and the thing an
+    earlier version could never report, because it only ever listed the ones that worked.
+
+    Backticked paths are included alongside markdown links. One real document referenced
+    its companion as `../findings.md`, in backticks, and was therefore invisible.
     """
-    found: list[Reference] = []
+    resolves: list[Reference] = []
+    broken: list[Reference] = []
     for number, line in enumerate(text.splitlines(), start=1):
-        for match in _MD_LINK.finditer(line):
-            target = match.group("target")
+        targets = [match.group("target") for match in _MD_LINK.finditer(line)]
+        targets += [match.group("path") for match in _BACKTICKED_PATH.finditer(line)]
+        for target in targets:
             if _ABSOLUTE.match(target):
                 continue
             resolved = (path.parent / target.split("#")[0]).resolve()
-            if resolved.exists():
-                found.append(Reference(path=target, line=number, text=str(resolved)))
-    return found
+            reference = Reference(path=target, line=number, text=str(resolved))
+            (resolves if resolved.exists() else broken).append(reference)
+    return resolves, broken
 
 
 def _inbound(path: Path, roots: list[Path]) -> list[Reference]:
@@ -268,11 +326,23 @@ def _render_inspection(result: Inspection) -> None:
     if result.repo_name:
         verdict = "names its own repo" if result.names_own_repo else "[yellow]never names its own repo[/yellow]"
         console.print(f"  {verdict} ({result.repo_name})")
-    listed = ", ".join(result.listed_in_repo_docs) or "[yellow]not listed in the repo's own docs[/yellow]"
-    console.print(f"  listed in: {listed}")
-    console.print(f"  outbound relative links: {len(result.outbound_relative)}")
+    if result.repo:
+        listed = ", ".join(result.listed_in_repo_docs) or "[yellow]not listed in the repo's own docs[/yellow]"
+        console.print(f"  listed in: {listed}")
+    if result.tracked_by_git is False:
+        console.print(
+            "  [yellow]not tracked by git[/yellow] — the repo is not claiming it, and it has "
+            "no history and no backup"
+        )
+    elif result.tracked_by_git:
+        console.print("  tracked by git")
+    console.print(f"  outbound relative links: {len(result.outbound_relative)} resolving")
     for reference in result.outbound_relative:
         console.print(f"    [cyan]{result.path}:{reference.line}[/cyan]  {reference.path}")
+    if result.outbound_broken:
+        console.print(f"  [yellow]{len(result.outbound_broken)} broken relative reference(s)[/yellow]")
+        for reference in result.outbound_broken:
+            console.print(f"    [cyan]{result.path}:{reference.line}[/cyan]  [yellow]{reference.path}[/yellow]")
     console.print(f"  searched: {', '.join(result.searched)}")
     console.print(f"  inbound references: {len(result.inbound)}")
     if result.ambiguous_name and result.inbound:
@@ -298,8 +368,8 @@ class SourceAction(StrEnum):
 
 @app.command()
 def move(
-    path: Annotated[Path, typer.Argument(help="The homeless document to bring in.")],
-    to: Annotated[str, typer.Option("--to", help="Vault directory to move it into, e.g. runbooks.")],
+    path: Annotated[Path | None, typer.Argument(help="The homeless document to bring in.")] = None,
+    to: Annotated[str, typer.Option("--to", help="Vault directory to move it into, e.g. runbooks.")] = "",
     title: Annotated[str | None, typer.Option("--title", help="Defaults to the document's first heading.")] = None,
     summary: Annotated[str, typer.Option("--summary", help="One or two sentences for the index.")] = "",
     kind: Annotated[str | None, typer.Option("--type", help="Defaults to the type that lives in --to.")] = None,
@@ -315,55 +385,131 @@ def move(
         SourceAction,
         typer.Option("--source", help="What happens to the original: remove it, replace it with a symlink, or keep."),
     ] = SourceAction.REMOVE,
+    from_file: Annotated[
+        Path | None,
+        typer.Option("--from-file", help="JSON array of moves. One object per document, same keys as the options."),
+    ] = None,
     dry_run: DryRunOption = True,
     as_json: JsonOption = False,
 ) -> None:
-    """Move a homeless document into the vault, with frontmatter and absolutised links."""
+    """Move a homeless document into the vault, with frontmatter and absolutised links.
+
+    A whole directory at once with `--from-file`, because ten options on one command line
+    is error-prone for a single file and unbearable across a hundred.
+    """
     with run():
-        source_path = path.expanduser()
-        if not source_path.is_file():
-            raise KbError(f"{source_path} is not a file")
-        if to not in schema.DIRECTORIES:
-            raise KbError(f"--to {to} is not a vault directory; one of: {', '.join(schema.DIRECTORIES)}")
         vault = _vault()
-        existing, body = _split(source_path)
-        heading = _first_heading(body)
-        resolved_title = title or existing.get("title") or heading or source_path.stem
-        rewritten, rewrites = _absolutise(source_path, body)
-        target = vault / to / f"{slug or schema.slugify(source_path.stem)}.md"
-        fields: dict[str, Any] = dict(existing)
-        fields.update(
-            {
-                "title": resolved_title,
-                "type": kind or _type_for(to) or existing.get("type") or "concept",
-                "status": status,
-                "created": _date(created) or existing.get("created") or _mtime_date(source_path),
-                "last_updated": date.today(),
-                "summary": summary or existing.get("summary") or "",
-            }
-        )
-        _merge_lists(fields, repos=repos, systems=systems, tickets=tickets, related=related)
-        if note:
-            fields["note"] = note
-        text = schema.render_article(fields, rewritten)
-        plan = {
-            "action": "move",
-            "source": str(source_path),
-            "target": str(target),
-            "source_action": source.value,
-            "links_absolutised": [asdict(reference) for reference in rewrites],
-            "dry_run": dry_run,
+        if from_file is not None:
+            if path is not None:
+                raise KbError("pass either a path or --from-file, not both")
+            specs = _read_specs(from_file.expanduser())
+        else:
+            if path is None:
+                raise KbError("give a document to move, or pass --from-file")
+            specs = [
+                {
+                    "path": str(path),
+                    "to": to,
+                    "title": title,
+                    "summary": summary,
+                    "type": kind,
+                    "status": status,
+                    "slug": slug,
+                    "created": created,
+                    "repos": repos,
+                    "systems": systems,
+                    "tickets": tickets,
+                    "related": related,
+                    "note": note,
+                    "source": source.value,
+                }
+            ]
+        plans = [_move_one(spec, vault, dry_run) for spec in specs]
+        if as_json:
+            emit_json({"moves": plans, "dry_run": dry_run})
+            return
+        for plan in plans:
+            _report(plan, plan["article"], as_json=False, dry_run=dry_run, verbose=len(plans) == 1)
+        if len(plans) > 1:
+            console.print(f"\n{'Would move' if dry_run else 'Moved'} {len(plans)} document(s).")
+            if dry_run:
+                console.print("[bold]Pass --no-dry-run to do it.[/bold]")
+
+
+def _read_specs(path: Path) -> list[dict[str, Any]]:
+    """Parse a batch file: a JSON array of move descriptions."""
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise KbError(f"{path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise KbError(f"{path} is not valid JSON: {exc.msg} (line {exc.lineno})") from exc
+    if not isinstance(loaded, list) or not all(isinstance(item, dict) for item in loaded):
+        raise KbError(f"{path} must contain a JSON array of objects")
+    if not loaded:
+        raise KbError(f"{path} is empty")
+    return loaded
+
+
+def _move_one(spec: dict[str, Any], vault: Path, dry_run: bool) -> dict[str, Any]:
+    """Plan and, unless this is a preview, perform one move."""
+    raw_path = spec.get("path")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise KbError(f"every move needs a path; got {spec!r}")
+    source_path = Path(raw_path).expanduser()
+    to = str(spec.get("to") or "")
+    title, summary = spec.get("title"), str(spec.get("summary") or "")
+    kind, slug, created = spec.get("type"), spec.get("slug"), spec.get("created")
+    status = str(spec.get("status") or "stable")
+    note = spec.get("note")
+    repos, systems = spec.get("repos"), spec.get("systems")
+    tickets, related = spec.get("tickets"), spec.get("related")
+    source = SourceAction(str(spec.get("source") or SourceAction.REMOVE.value))
+
+    if not source_path.is_file():
+        raise KbError(f"{source_path} is not a file")
+    if to not in schema.DIRECTORIES:
+        raise KbError(f"{source_path}: --to {to!r} is not a vault directory; one of: {', '.join(schema.DIRECTORIES)}")
+    if source is not SourceAction.KEEP:
+        _guard_editor(source_path)
+    existing, body = _split(source_path)
+    heading = _first_heading(body)
+    resolved_title = title or existing.get("title") or heading or source_path.stem
+    rewritten, rewrites = _absolutise(source_path, body)
+    target = vault / to / f"{slug or schema.slugify(source_path.stem)}.md"
+    fields: dict[str, Any] = dict(existing)
+    fields.update(
+        {
+            "title": resolved_title,
+            "type": kind or _type_for(to) or existing.get("type") or "concept",
+            "status": status,
+            "created": _date(created) or existing.get("created") or _mtime_date(source_path),
+            "last_updated": date.today(),
+            "summary": summary or existing.get("summary") or "",
         }
-        if not dry_run:
-            _guard(target)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding="utf-8")
-            if source is SourceAction.SYMLINK:
-                source_path.unlink()
-                source_path.symlink_to(target)
-            elif source is SourceAction.REMOVE:
-                source_path.unlink()
-        _report(plan, text, as_json, dry_run)
+    )
+    _merge_lists(fields, repos=repos, systems=systems, tickets=tickets, related=related)
+    if note:
+        fields["note"] = note
+    text = schema.render_article(fields, rewritten)
+    if not dry_run:
+        _guard(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        if source is SourceAction.SYMLINK:
+            source_path.unlink()
+            source_path.symlink_to(target)
+        elif source is SourceAction.REMOVE:
+            source_path.unlink()
+    return {
+        "action": "move",
+        "source": str(source_path),
+        "target": str(target),
+        "source_action": source.value,
+        "links_absolutised": [asdict(reference) for reference in rewrites],
+        "dry_run": dry_run,
+        "article": text,
+    }
 
 
 @app.command()
@@ -428,6 +574,31 @@ def _vault() -> Path:
     if not vault.is_dir():
         raise VaultNotFoundError(f"no vault at {vault}; run `kb init` or set KB_VAULT")
     return vault
+
+
+#: Swap files an editor leaves beside a file it currently has open.
+_EDITOR_SWAP_SUFFIXES = (".swp", ".swo", ".swn")
+
+
+def _guard_editor(source: Path) -> None:
+    """Refuse to remove a file an editor appears to have open.
+
+    A move deletes the original. If a buffer is still open on it, saving from that buffer
+    afterwards writes a stale copy back to a path that no longer exists — and the vault
+    copy, which is now the only one, never sees the change.
+    """
+    swaps = [
+        candidate
+        for suffix in _EDITOR_SWAP_SUFFIXES
+        for candidate in (source.parent / f".{source.name}{suffix}", source.with_suffix(suffix))
+        if candidate.exists()
+    ]
+    if swaps:
+        names = ", ".join(str(swap) for swap in swaps)
+        raise KbError(
+            f"{source} looks open in an editor ({names}). Close it, or delete the stale swap file, "
+            "then run this again — moving it now risks writing the old copy back from that buffer."
+        )
 
 
 def _guard(target: Path) -> None:
@@ -504,7 +675,7 @@ def _absolutise(source: Path, body: str) -> tuple[str, list[Reference]]:
     return "\n".join(lines), rewrites
 
 
-def _report(plan: dict[str, Any], text: str, as_json: bool, dry_run: bool) -> None:
+def _report(plan: dict[str, Any], text: str, as_json: bool, dry_run: bool, verbose: bool = True) -> None:
     if as_json:
         emit_json({**plan, "article": text})
         return
@@ -519,9 +690,9 @@ def _report(plan: dict[str, Any], text: str, as_json: bool, dry_run: bool) -> No
         console.print("  [dim]note: git stores a symlink as a path string, not content[/dim]")
     elif plan["source_action"] == SourceAction.REMOVE.value:
         console.print(f"  [yellow]{'would remove' if dry_run else 'removed'}[/yellow] {plan['source']}")
-    if dry_run:
+    if dry_run and verbose:
         console.print("\n[dim]--- article that would be written ---[/dim]")
         console.print(text, highlight=False, markup=False)
         console.print("[bold]Pass --no-dry-run to do it.[/bold]")
-    else:
+    elif not dry_run and verbose:
         console.print("\n[dim]Next: `kb index`, then `kb lint`.[/dim]")
