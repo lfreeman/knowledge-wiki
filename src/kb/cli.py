@@ -6,6 +6,7 @@ import typer
 
 from . import __version__, config
 from .commands import index as index_cmd
+from .commands import lint as lint_cmd
 from .commands import schema_cmd
 
 EPILOG = (
@@ -20,9 +21,10 @@ app = typer.Typer(
     add_completion=True,
 )
 
-# index and schema are single commands, so they sit at the top level rather than behind
+# index, lint and schema are single commands, so they sit at the top level rather than behind
 # a group that would read as `kb index index`.
 app.command("index", rich_help_panel="Common")(index_cmd.index)
+app.command("lint", rich_help_panel="Common")(lint_cmd.lint)
 app.command("schema", rich_help_panel="Common")(schema_cmd.schema)
 
 

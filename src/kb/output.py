@@ -28,8 +28,12 @@ def emit_json(payload: Any) -> None:
 
 
 def table(*columns: str) -> Table:
-    """A table with the CLI's standard column styling."""
+    """A table with the CLI's standard column styling.
+
+    Columns fold rather than truncate. A finding whose detail is cut off at the terminal
+    width is a finding the reader has to go and look up by hand.
+    """
     built = Table(show_header=True, header_style="bold")
     for column in columns:
-        built.add_column(column)
+        built.add_column(column, overflow="fold")
     return built
