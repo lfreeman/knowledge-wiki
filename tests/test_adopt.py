@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -301,3 +302,36 @@ def test_a_distinctive_filename_is_not_flagged(repo: Path, tmp_path: Path, monke
     doc.write_text("# Distinctive\n", encoding="utf-8")
     monkeypatch.setenv("KB_REPO_ROOT", str(tmp_path))
     assert examine(doc).ambiguous_name is False
+
+
+def test_move_writes_dates_unquoted(repo: Path, vault: Path) -> None:
+    # A quoted date beside an unquoted one is noise in every later diff, and `adopt` had
+    # the same bug `article` did: it passed the date through as a string.
+    doc = repo / "docs" / "runbook.md"
+    doc.write_text("# Runbook\n", encoding="utf-8")
+    runner.invoke(
+        app,
+        ["adopt", "move", str(doc), "--to", "runbooks", "--summary", "S", "--created", "2026-05-11", "--no-dry-run"],
+    )
+    front, _, _ = schema.split_frontmatter((vault / "runbooks" / "runbook.md").read_text())
+    assert "created: 2026-05-11" in front
+    assert '"' not in front.split("created:")[1].splitlines()[0]
+
+
+def test_point_writes_dates_unquoted(repo: Path, vault: Path) -> None:
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n", encoding="utf-8")
+    runner.invoke(app, ["adopt", "point", str(doc), "--summary", "S", "--no-dry-run"])
+    front, _, _ = schema.split_frontmatter((vault / "reference" / "design.md").read_text())
+    assert f"created: {date.today().isoformat()}" in front
+
+
+def test_move_rejects_a_created_date_it_cannot_parse(repo: Path, vault: Path) -> None:
+    doc = repo / "docs" / "runbook.md"
+    doc.write_text("# Runbook\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["adopt", "move", str(doc), "--to", "runbooks", "--summary", "S", "--created", "whenever", "--no-dry-run"],
+    )
+    assert result.exit_code == 1
+    assert doc.exists()

@@ -71,3 +71,23 @@ def test_a_rendered_article_parses_as_an_article(tmp_path: Path) -> None:
 def test_slugify_produces_a_filename_safe_slug() -> None:
     assert schema.slugify("Diagnosing a Slow / Stuck JVM Pod!") == "diagnosing-a-slow-stuck-jvm-pod"
     assert schema.slugify("--already-a-slug--") == "already-a-slug"
+
+
+def test_a_date_field_that_arrived_as_a_string_renders_bare() -> None:
+    # Re-rendering an article read back from disk must not re-quote its dates, or every
+    # touch leaves one date quoted and its neighbour not.
+    rendered = schema.render_frontmatter({"created": "2026-07-26", "last_updated": "2026-09-14"})
+    assert rendered == "created: 2026-07-26\nlast_updated: 2026-09-14"
+    assert yaml.safe_load(rendered)["created"].isoformat() == "2026-07-26"
+
+
+def test_a_date_field_that_is_not_a_date_is_left_alone() -> None:
+    rendered = schema.render_frontmatter({"created": "whenever"})
+    assert yaml.safe_load(rendered) == {"created": "whenever"}
+
+
+def test_rendering_an_article_twice_is_stable(tmp_path: Path) -> None:
+    first = schema.render_article({"title": "T", "created": "2026-07-26", "summary": "S"}, "Body.\n")
+    front, body, _ = schema.split_frontmatter(first)
+    second = schema.render_article(yaml.safe_load(front), body)
+    assert first == second

@@ -337,8 +337,8 @@ def move(
                 "title": resolved_title,
                 "type": kind or _type_for(to) or existing.get("type") or "concept",
                 "status": status,
-                "created": created or existing.get("created") or _mtime_date(source_path),
-                "last_updated": date.today().isoformat(),
+                "created": _date(created) or existing.get("created") or _mtime_date(source_path),
+                "last_updated": date.today(),
                 "summary": summary or existing.get("summary") or "",
             }
         )
@@ -392,8 +392,8 @@ def point(
             "title": resolved_title,
             "type": "reference",
             "status": "stable",
-            "created": date.today().isoformat(),
-            "last_updated": date.today().isoformat(),
+            "created": date.today(),
+            "last_updated": date.today(),
             "summary": summary,
             "path": str(source_path.resolve()),
         }
@@ -452,8 +452,19 @@ def _type_for(directory: str) -> str | None:
     return None
 
 
-def _mtime_date(path: Path) -> str:
-    return date.fromtimestamp(path.stat().st_mtime).isoformat()
+def _mtime_date(path: Path) -> date:
+    """A document's last-modified date, the best available stand-in for when it was written."""
+    return date.fromtimestamp(path.stat().st_mtime)
+
+
+def _date(value: str | None) -> date | None:
+    """Parse a `YYYY-MM-DD` option. Returns a date, not a string, so it renders unquoted."""
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise KbError(f"{value!r} is not a YYYY-MM-DD date") from exc
 
 
 def _merge_lists(fields: dict[str, Any], **provided: list[str] | None) -> None:

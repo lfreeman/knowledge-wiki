@@ -52,6 +52,11 @@ TYPE_DIRECTORY: dict[str, str] = {
 
 REQUIRED_FIELDS: tuple[str, ...] = ("title", "type", "status", "created", "last_updated", "summary")
 
+#: Fields that hold a date. Rendered bare, never quoted — a value that round-trips back
+#: through YAML as a string would otherwise have to be quoted to stay one, leaving one
+#: date quoted and its neighbour not in the same block.
+DATE_FIELDS: tuple[str, ...] = ("created", "last_updated")
+
 #: Fields that must be a list of strings when present.
 LIST_FIELDS: tuple[str, ...] = ("tickets", "repos", "systems", "related", "sources")
 
@@ -317,6 +322,16 @@ def _scalar(value: Any, flow: bool = False) -> str:
     return text
 
 
+def _as_date(name: str, value: Any) -> Any:
+    """Turn a date field that arrived as a string back into a date, so it renders bare."""
+    if name in DATE_FIELDS and isinstance(value, str):
+        try:
+            return date.fromisoformat(value.strip())
+        except ValueError:
+            return value
+    return value
+
+
 def render_frontmatter(fields: dict[str, Any]) -> str:
     """Render frontmatter in the style SCHEMA.md documents: flow lists, minimal quoting.
 
@@ -334,7 +349,7 @@ def render_frontmatter(fields: dict[str, Any]) -> str:
         if isinstance(value, list):
             lines.append(f"{name}: [{', '.join(_scalar(item, flow=True) for item in value)}]")
         else:
-            lines.append(f"{name}: {_scalar(value)}")
+            lines.append(f"{name}: {_scalar(_as_date(name, value))}")
     return "\n".join(lines)
 
 
