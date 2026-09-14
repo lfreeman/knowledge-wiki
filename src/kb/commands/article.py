@@ -56,8 +56,8 @@ def new(
             "title": title,
             "type": kind or _type_for(directory) or "concept",
             "status": status,
-            "created": created or date.today().isoformat(),
-            "last_updated": date.today().isoformat(),
+            "created": _date(created),
+            "last_updated": date.today(),
             "summary": summary,
             "tickets": tickets or None,
             "repos": repos or None,
@@ -93,7 +93,7 @@ def touch(
     """Set last_updated on articles you just edited."""
     with run():
         vault = _vault()
-        stamp = on or date.today().isoformat()
+        stamp = _date(on)
         changed: list[dict[str, str]] = []
         for slug in slugs:
             target = _target(vault, slug)
@@ -111,7 +111,7 @@ def touch(
             fields["last_updated"] = stamp
             if not dry_run:
                 target.write_text(schema.render_article(fields, body), encoding="utf-8")
-            changed.append({"slug": slug, "from": was, "to": stamp})
+            changed.append({"slug": slug, "from": was, "to": stamp.isoformat()})
         if as_json:
             emit_json({"changed": changed, "dry_run": dry_run})
             return
@@ -120,6 +120,21 @@ def touch(
             console.print(f"{'Would bump' if dry_run else 'Bumped'} [bold]{entry['slug']}[/bold]  {arrow}")
         if dry_run:
             console.print("[bold]Pass --no-dry-run to do it.[/bold]")
+
+
+def _date(value: str | None) -> date:
+    """Parse a `YYYY-MM-DD` option, defaulting to today.
+
+    Returns a `date` rather than a string so the renderer emits it bare. A string that
+    looks like a date has to be quoted to survive the round trip, which would leave one
+    date quoted and its neighbour not in the same frontmatter block.
+    """
+    if value is None:
+        return date.today()
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise KbError(f"{value!r} is not a YYYY-MM-DD date") from exc
 
 
 def _vault() -> Path:

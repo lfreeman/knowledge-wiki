@@ -111,3 +111,32 @@ def test_touch_takes_several_slugs(article: ArticleWriter, vault: Path) -> None:
 
 def test_touch_fails_on_a_missing_article(vault: Path) -> None:
     assert runner.invoke(app, ["article", "touch", "systems/nope", "--no-dry-run"]).exit_code == 1
+
+
+def test_a_bumped_date_is_written_unquoted(article: ArticleWriter, vault: Path) -> None:
+    # A quoted date beside an unquoted one in the same block is noise in every later diff.
+    article("systems/a", created="2026-09-13", last_updated="2020-01-01")
+    runner.invoke(app, ["article", "touch", "systems/a", "--on", "2026-09-14", "--no-dry-run"])
+    front, _, _ = schema.split_frontmatter((vault / "systems" / "a.md").read_text())
+    assert "last_updated: 2026-09-14" in front
+    assert '"' not in front.split("last_updated:")[1].splitlines()[0]
+
+
+def test_a_new_article_writes_both_dates_unquoted(vault: Path) -> None:
+    runner.invoke(app, [*BASE, "--created", "2026-09-13", "--no-dry-run"])
+    front, _, _ = schema.split_frontmatter((vault / "runbooks" / "a-slug.md").read_text())
+    assert "created: 2026-09-13" in front
+    assert f"last_updated: {date.today().isoformat()}" in front
+
+
+def test_touch_rejects_a_date_it_cannot_parse(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", last_updated="2020-01-01")
+    result = runner.invoke(app, ["article", "touch", "systems/a", "--on", "last tuesday", "--no-dry-run"])
+    assert result.exit_code == 1
+    assert schema.parse_article(vault / "systems" / "a.md", vault).date_field("last_updated") == date(2020, 1, 1)
+
+
+def test_new_rejects_a_created_date_it_cannot_parse(vault: Path) -> None:
+    result = runner.invoke(app, [*BASE, "--created", "whenever", "--no-dry-run"])
+    assert result.exit_code == 1
+    assert not (vault / "runbooks" / "a-slug.md").exists()
