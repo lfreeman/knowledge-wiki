@@ -1,0 +1,28 @@
+# ---------------------------------------------------------------------------
+# This repo is PUBLIC. The knowledge base itself is not.
+#
+# PLAN.md contains internal repo names, ticket IDs, customer names, corpus
+# measurements and an S3 path. It stays in this directory for convenience but
+# must never be published. Ignoring it makes that structural rather than a
+# matter of remembering.
+#
+# Put any other working note under notes/ rather than the repo root.
+# ---------------------------------------------------------------------------
+PLAN.md
+notes/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# macOS / editors
+.DS_Store
+*.swp
+*~
