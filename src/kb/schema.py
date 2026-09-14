@@ -262,3 +262,82 @@ def load_vault(vault: Path) -> tuple[list[Article], list[tuple[Path, str]]]:
         except ArticleError as exc:
             failures.append((path, str(exc).removeprefix(f"{path}: ")))
     return articles, failures
+
+
+#: The order SCHEMA.md §2 lists the fields in. Anything not named here follows, sorted.
+FIELD_ORDER: tuple[str, ...] = (
+    "title",
+    "type",
+    "status",
+    "created",
+    "last_updated",
+    "summary",
+    "tickets",
+    "repos",
+    "systems",
+    "related",
+    "sources",
+    "path",
+    "note",
+)
+
+#: A scalar starting with one of these opens a YAML construct and has to be quoted.
+_YAML_INDICATORS = "-?:,[]{}#&*!|>'\"%@`"
+
+
+def slugify(text: str) -> str:
+    """A filename-safe slug: lowercase, hyphen-separated, no runs and no edges."""
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", text.lower())).strip("-")
+
+
+def _needs_quotes(value: str, flow: bool = False) -> bool:
+    if not value or value.strip() != value:
+        return True
+    if value[0] in _YAML_INDICATORS:
+        return True
+    if ": " in value or value.endswith(":") or " #" in value:
+        return True
+    # Inside a flow sequence these end the item wherever they appear, not just at the
+    # start — so `[[a/b|B]], with, a comma` would silently become three entries.
+    if flow and any(character in value for character in ",[]{}"):
+        return True
+    # A bare `2026-09-14` or `true` would come back out of the parser as a date or a
+    # bool rather than the string that went in.
+    return bool(yaml.safe_load(value) != value)
+
+
+def _scalar(value: Any, flow: bool = False) -> str:
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bool | int | float):
+        return str(value)
+    text = " ".join(str(value).split())
+    if _needs_quotes(text, flow=flow):
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return text
+
+
+def render_frontmatter(fields: dict[str, Any]) -> str:
+    """Render frontmatter in the style SCHEMA.md documents: flow lists, minimal quoting.
+
+    Fields whose value is None or an empty string are dropped; an empty list is kept,
+    because `related: []` says "checked, nothing related" where a missing field says
+    "never considered".
+    """
+    ordered = [name for name in FIELD_ORDER if name in fields]
+    ordered += sorted(name for name in fields if name not in FIELD_ORDER)
+    lines: list[str] = []
+    for name in ordered:
+        value = fields[name]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if isinstance(value, list):
+            lines.append(f"{name}: [{', '.join(_scalar(item, flow=True) for item in value)}]")
+        else:
+            lines.append(f"{name}: {_scalar(value)}")
+    return "\n".join(lines)
+
+
+def render_article(fields: dict[str, Any], body: str) -> str:
+    """A complete article: the frontmatter fence, then the body, newline-terminated."""
+    return f"---\n{render_frontmatter(fields)}\n---\n\n{body.lstrip('\n').rstrip()}\n"

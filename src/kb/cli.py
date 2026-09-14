@@ -5,9 +5,10 @@ from typing import Annotated
 import typer
 
 from . import __version__, config
+from .commands import adopt, article, doctor, schema_cmd, skill
 from .commands import index as index_cmd
+from .commands import init as init_cmd
 from .commands import lint as lint_cmd
-from .commands import schema_cmd
 
 EPILOG = (
     f"Config: {config.config_file()}    Vault: {config.load_config().vault}\n\n"
@@ -26,6 +27,11 @@ app = typer.Typer(
 app.command("index", rich_help_panel="Common")(index_cmd.index)
 app.command("lint", rich_help_panel="Common")(lint_cmd.lint)
 app.command("schema", rich_help_panel="Common")(schema_cmd.schema)
+app.add_typer(article.app, name="article", rich_help_panel="Common")
+app.add_typer(adopt.app, name="adopt", rich_help_panel="Common")
+app.add_typer(skill.app, name="skill", rich_help_panel="Setup")
+app.command("init", rich_help_panel="Setup")(init_cmd.init)
+app.command("doctor", rich_help_panel="Setup")(doctor.doctor)
 
 
 def _version(value: bool) -> None:

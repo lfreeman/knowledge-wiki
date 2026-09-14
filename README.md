@@ -49,14 +49,28 @@ kb skill install --no-dry-run
 ## Commands
 
 ```bash
-kb index          # rebuild _index.md and _backlinks.json from frontmatter
-kb lint           # broken links, dead pointers, missing fields, orphans, stale dates
-kb schema         # print the rules the vault follows
-kb doctor         # check the config, the vault, and the skill link still resolve
+kb init                     # create the vault directories and the config file
+kb index                    # rebuild _index.md and _backlinks.json from frontmatter
+kb lint                     # broken links, dead pointers, missing fields, orphans, stale dates
+kb schema                   # print the rules the vault follows
+kb doctor                   # check the config, the vault, and the skill link still resolve
+
+kb article new <dir>/<slug> --title … --summary … --body-file …
+kb article touch <dir>/<slug>          # bump last_updated after editing by hand
+
+kb adopt inspect <path>                # evidence for classifying a document; decides nothing
+kb adopt point   <path> --summary …    # a stub at a document that rightfully stays put
+kb adopt move    <path> --to runbooks  # bring a homeless document in, absolutising its links
+
+kb skill install                       # symlink the capture skill into ~/.claude/skills
 ```
 
 Every read command takes `--json`, because the main caller is an agent rather than a
-person.
+person. Every write is a preview until `--no-dry-run`.
+
+`kb lint` exits 1 on an error and 0 on warnings alone, so it works as a pre-commit
+hook. It never fixes anything — a tool that silently rewrites an article is a tool you
+have to re-read the article to trust.
 
 ## The rules
 
