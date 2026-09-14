@@ -140,3 +140,79 @@ def test_new_rejects_a_created_date_it_cannot_parse(vault: Path) -> None:
     result = runner.invoke(app, [*BASE, "--created", "whenever", "--no-dry-run"])
     assert result.exit_code == 1
     assert not (vault / "runbooks" / "a-slug.md").exists()
+
+
+def test_link_writes_the_relation_into_both_articles(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", title="Article A")
+    article("runbooks/b", title="Article B")
+    assert runner.invoke(app, ["article", "link", "systems/a", "runbooks/b", "--no-dry-run"]).exit_code == 0
+    assert schema.parse_article(vault / "systems" / "a.md", vault).list_field("related") == [
+        "[[runbooks/b|Article B]]"
+    ]
+    assert schema.parse_article(vault / "runbooks" / "b.md", vault).list_field("related") == [
+        "[[systems/a|Article A]]"
+    ]
+
+
+def test_link_takes_each_alias_from_the_other_articles_own_title(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", title="Collaborative Insights — How It Works")
+    article("runbooks/b", title="Article B")
+    runner.invoke(app, ["article", "link", "runbooks/b", "systems/a", "--no-dry-run"])
+    (link,) = schema.parse_article(vault / "runbooks" / "b.md", vault).list_field("related")
+    assert link == "[[systems/a|Collaborative Insights — How It Works]]"
+
+
+def test_link_clears_the_orphan_warning(article: ArticleWriter, vault: Path) -> None:
+    from kb.commands.lint import check
+
+    article("systems/a")
+    article("runbooks/b")
+    assert {f.path for f in check(vault) if f.rule == "orphan"} == {"systems/a.md", "runbooks/b.md"}
+    runner.invoke(app, ["article", "link", "systems/a", "runbooks/b", "--no-dry-run"])
+    assert [f for f in check(vault) if f.rule == "orphan"] == []
+
+
+def test_link_is_idempotent(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a")
+    article("runbooks/b")
+    runner.invoke(app, ["article", "link", "systems/a", "runbooks/b", "--no-dry-run"])
+    result = runner.invoke(app, ["article", "link", "systems/a", "runbooks/b", "--no-dry-run"])
+    assert "already present" in result.output
+    assert len(schema.parse_article(vault / "systems" / "a.md", vault).list_field("related")) == 1
+
+
+def test_link_keeps_an_existing_relation(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", related=["[[guides/c|Article C]]"])
+    article("runbooks/b", title="Article B")
+    runner.invoke(app, ["article", "link", "systems/a", "runbooks/b", "--no-dry-run"])
+    assert schema.parse_article(vault / "systems" / "a.md", vault).list_field("related") == [
+        "[[guides/c|Article C]]",
+        "[[runbooks/b|Article B]]",
+    ]
+
+
+def test_link_bumps_last_updated_on_what_it_edited(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", last_updated="2020-01-01")
+    article("runbooks/b", last_updated="2020-01-01")
+    runner.invoke(app, ["article", "link", "systems/a", "runbooks/b", "--no-dry-run"])
+    assert schema.parse_article(vault / "systems" / "a.md", vault).date_field("last_updated") == date.today()
+
+
+def test_link_one_way_touches_only_the_first(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a")
+    article("runbooks/b")
+    runner.invoke(app, ["article", "link", "systems/a", "runbooks/b", "--one-way", "--no-dry-run"])
+    assert schema.parse_article(vault / "runbooks" / "b.md", vault).list_field("related") == []
+
+
+def test_link_is_a_preview_by_default(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a")
+    article("runbooks/b")
+    result = runner.invoke(app, ["article", "link", "systems/a", "runbooks/b"])
+    assert "would add" in result.output
+    assert schema.parse_article(vault / "systems" / "a.md", vault).list_field("related") == []
+
+
+def test_link_fails_when_either_article_is_missing(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a")
+    assert runner.invoke(app, ["article", "link", "systems/a", "runbooks/nope", "--no-dry-run"]).exit_code == 1

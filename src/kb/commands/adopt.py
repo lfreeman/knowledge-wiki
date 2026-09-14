@@ -74,6 +74,8 @@ class Inspection:
     listed_in_repo_docs: list[str]
     outbound_relative: list[Reference]
     inbound: list[Reference]
+    searched: list[str]
+    ambiguous_name: bool
 
 
 @app.command()
@@ -101,7 +103,11 @@ def examine(path: Path, extra_roots: list[Path] | None = None) -> Inspection:
     text = path.read_text(encoding="utf-8", errors="replace")
     repo = _repo_root(path)
     repo_name = repo.name if repo else None
-    roots = [root for root in [repo, *(extra_roots or [])] if root is not None]
+    # The enclosing repo alone is not enough. A document is most often referenced from a
+    # *different* repo, which is exactly the reference that breaks silently on a move —
+    # searching only the enclosing repo once missed both real inbound references.
+    roots = _dedupe([root for root in [repo, config.load_config().repo_root, *(extra_roots or [])] if root])
+    inbound = _inbound(path, roots)
     return Inspection(
         path=str(path),
         exists=True,
@@ -113,8 +119,44 @@ def examine(path: Path, extra_roots: list[Path] | None = None) -> Inspection:
         names_own_repo=repo_name is not None and repo_name in text,
         listed_in_repo_docs=_listed_in_repo_docs(path, repo),
         outbound_relative=_outbound(path, text),
-        inbound=_inbound(path, roots),
+        inbound=inbound,
+        searched=[str(root) for root in roots],
+        ambiguous_name=_is_common_name(path, roots),
     )
+
+
+def _dedupe(roots: list[Path]) -> list[Path]:
+    """Keep only the broadest roots, so no directory is scanned twice.
+
+    Order does not matter: the enclosing repo usually sits *inside* the configured repo
+    root, so a first-wins rule would keep both and walk the repo twice.
+    """
+    resolved = list(dict.fromkeys(root.expanduser() for root in roots))
+    return [
+        root
+        for root in resolved
+        if not any(other != root and root.is_relative_to(other) for other in resolved)
+    ]
+
+
+def _is_common_name(path: Path, roots: list[Path]) -> bool:
+    """Whether other files share this filename, which makes every inbound hit suspect.
+
+    `architecture.md` and `README.md` live in half the repositories on a machine. A hit
+    on the bare filename may point at a different file entirely, so the caller has to be
+    told rather than left to assume.
+    """
+    resolved = path.resolve()
+    seen = 0
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for candidate in _text_files(root):
+            if candidate.name == path.name and candidate != resolved:
+                seen += 1
+                if seen:
+                    return True
+    return False
 
 
 def _repo_root(path: Path) -> Path | None:
@@ -231,7 +273,13 @@ def _render_inspection(result: Inspection) -> None:
     console.print(f"  outbound relative links: {len(result.outbound_relative)}")
     for reference in result.outbound_relative:
         console.print(f"    [cyan]{result.path}:{reference.line}[/cyan]  {reference.path}")
+    console.print(f"  searched: {', '.join(result.searched)}")
     console.print(f"  inbound references: {len(result.inbound)}")
+    if result.ambiguous_name and result.inbound:
+        console.print(
+            f"    [yellow]note: other files are also named {Path(result.path).name}, "
+            "so a hit may point at a different one[/yellow]"
+        )
     for reference in result.inbound:
         console.print(f"    [cyan]{reference.path}:{reference.line}[/cyan]  {reference.text}")
     console.print(

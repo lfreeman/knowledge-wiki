@@ -12,7 +12,7 @@ from .commands import lint as lint_cmd
 
 EPILOG = (
     f"Config: {config.config_file()}    Vault: {config.load_config().vault}\n\n"
-    "Overrides: KB_CONFIG_DIR, KB_VAULT, KB_MODEL (shell environment wins over config.json)."
+    "Overrides: KB_CONFIG_DIR, KB_VAULT, KB_REPO_ROOT, KB_MODEL (shell environment wins over config.json)."
 )
 
 app = typer.Typer(

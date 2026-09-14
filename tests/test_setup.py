@@ -1,7 +1,10 @@
 """`kb init`, `kb skill`, `kb doctor`, `kb schema` — the wiring, not the content."""
 
 import json
+import os
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import ArticleWriter
@@ -157,20 +160,52 @@ def test_doctor_warns_when_the_vault_is_not_a_git_repository(article: ArticleWri
     assert "git" in finding["detail"]
 
 
+def _index_finding(payload: dict[str, Any]) -> dict[str, Any]:
+    (finding,) = [item for item in payload["findings"] if item["check"] == "index"]
+    assert isinstance(finding, dict)
+    return finding
+
+
+def test_doctor_ignores_an_mtime_change_that_changed_no_content(
+    article: ArticleWriter, vault: Path
+) -> None:
+    # A rebase, a checkout or a fresh clone rewrites every mtime without touching a
+    # byte. An mtime-based check reports the whole vault as stale after each of them.
+    article("guides/a")
+    runner.invoke(app, ["index"])
+    later = time.time() + 10
+    for path in (vault / "guides" / "a.md", vault / schema.INDEX_FILE, vault / schema.BACKLINKS_FILE):
+        os.utime(path, (later, later))
+    assert _index_finding(json.loads(runner.invoke(app, ["doctor", "--json"]).output))["status"] == "ok"
+
+
 def test_doctor_warns_when_an_article_changed_after_the_last_index(
     article: ArticleWriter, vault: Path
 ) -> None:
     article("guides/a")
     runner.invoke(app, ["index"])
-    import os
-    import time
-
-    later = time.time() + 10
-    os.utime(vault / "guides" / "a.md", (later, later))
-    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).output)
-    (finding,) = [item for item in payload["findings"] if item["check"] == "index"]
+    article("guides/b")
+    finding = _index_finding(json.loads(runner.invoke(app, ["doctor", "--json"]).output))
     assert finding["status"] == "warn"
-    assert "a.md" in finding["detail"]
+    assert schema.INDEX_FILE in finding["detail"]
+
+
+def test_doctor_warns_when_only_the_backlinks_file_drifted(article: ArticleWriter, vault: Path) -> None:
+    article("guides/a")
+    runner.invoke(app, ["index"])
+    (vault / schema.BACKLINKS_FILE).write_text('{"guides/a": ["invented/source"]}\n', encoding="utf-8")
+    finding = _index_finding(json.loads(runner.invoke(app, ["doctor", "--json"]).output))
+    assert finding["status"] == "warn"
+    assert schema.BACKLINKS_FILE in finding["detail"]
+
+
+def test_doctor_warns_when_a_generated_file_is_missing(article: ArticleWriter, vault: Path) -> None:
+    article("guides/a")
+    runner.invoke(app, ["index"])
+    (vault / schema.BACKLINKS_FILE).unlink()
+    finding = _index_finding(json.loads(runner.invoke(app, ["doctor", "--json"]).output))
+    assert finding["status"] == "warn"
+    assert "absent" in finding["detail"]
 
 
 def test_doctor_reports_a_missing_vault_as_critical(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,3 +246,34 @@ def test_schema_path_points_inside_the_installed_package() -> None:
     output = runner.invoke(app, ["schema", "--path"]).output.strip()
     assert output.endswith("kb/SCHEMA.md")
     assert Path(output).is_file()
+
+
+def test_repo_root_defaults_and_is_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kb import config as kb_config
+
+    monkeypatch.delenv("KB_REPO_ROOT", raising=False)
+    assert kb_config.load_config().repo_root == Path.home() / "workspace"
+    monkeypatch.setenv("KB_REPO_ROOT", "/somewhere/else")
+    assert kb_config.load_config().repo_root == Path("/somewhere/else")
+
+
+def test_repo_resolves_a_repos_name_to_a_directory(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kb import config as kb_config
+
+    monkeypatch.setenv("KB_REPO_ROOT", "/checkouts")
+    assert kb_config.load_config().repo("some-service") == Path("/checkouts/some-service")
+
+
+def test_init_keeps_repo_root_in_the_config_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kb import config as kb_config
+
+    monkeypatch.setenv("KB_REPO_ROOT", str(tmp_path / "checkouts"))
+    runner.invoke(app, ["init", "--vault", str(tmp_path / "v")])
+    assert json.loads(kb_config.config_file().read_text())["repo_root"] == str(tmp_path / "checkouts")
+
+
+def test_doctor_warns_when_the_repo_root_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KB_REPO_ROOT", str(tmp_path / "nope"))
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).output)
+    (finding,) = [item for item in payload["findings"] if item["check"] == "repo-root"]
+    assert finding["status"] == "warn"

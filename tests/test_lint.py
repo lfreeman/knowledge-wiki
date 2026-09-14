@@ -228,3 +228,54 @@ def test_a_finding_location_is_a_clickable_path_and_line(article: ArticleWriter,
     (found,) = [f for f in check(vault) if f.rule == "link-bare-title"]
     on_disk = (vault / found.path).read_text().splitlines()
     assert "[[Bare Title]]" in on_disk[found.line - 1]
+
+
+def test_it_finds_a_cited_file_that_no_longer_exists(article: ArticleWriter, vault: Path, tmp_path: Path) -> None:
+    # tmp_path stands in for the home directory, so the rule's home-rooted filter applies.
+    article("systems/a", body=f"The real spec lives at `{tmp_path}/gone.md`.\n")
+    (found,) = [f for f in check(vault, home=tmp_path) if f.rule == "cited-path-missing"]
+    assert found.severity == WARN
+    assert "gone.md" in found.detail
+
+
+def test_a_cited_file_that_exists_is_clean(article: ArticleWriter, vault: Path, tmp_path: Path) -> None:
+    # tmp_path stands in for the home directory, so the rule's home-rooted filter applies.
+    real = tmp_path / "spec.md"
+    real.write_text("here", encoding="utf-8")
+    article("systems/a", body=f"The real spec lives at `{real}`.\n")
+    assert [f for f in check(vault, home=tmp_path) if f.rule == "cited-path-missing"] == []
+
+
+def test_it_ignores_things_that_look_like_paths_but_are_not(
+    article: ArticleWriter, vault: Path, tmp_path: Path
+) -> None:
+    # Every one of these appeared in the real vault and none is a defect. Checking them
+    # produced sixteen findings and zero real ones.
+    body = (
+        "Call `/permits/rates` on the registry.\n"
+        "Run `/gaps-review` to sort the list.\n"
+        "Scrape `/actuator/prometheus` for metrics.\n"
+        "Inside the container, look in `/proc/1/root/tmp/`.\n"
+        "Hit `/stats?executor=KDF_FILE` for pod counts.\n"
+    )
+    article("systems/a", body=body)
+    assert [f for f in check(vault, home=tmp_path) if f.rule == "cited-path-missing"] == []
+
+
+def test_a_tilde_path_is_expanded_before_checking(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", body="See `~/definitely-not-a-real-file-9e3f.md`.\n")
+    assert [f.rule for f in check(vault) if f.rule == "cited-path-missing"] == ["cited-path-missing"]
+
+
+def test_the_same_missing_path_is_reported_once(article: ArticleWriter, vault: Path, tmp_path: Path) -> None:
+    # tmp_path stands in for the home directory, so the rule's home-rooted filter applies.
+    article("systems/a", body=f"See `{tmp_path}/gone.md`.\n\nAnd again: `{tmp_path}/gone.md`.\n")
+    assert len([f for f in check(vault, home=tmp_path) if f.rule == "cited-path-missing"]) == 1
+
+
+def test_a_cited_path_finding_points_at_the_right_line(article: ArticleWriter, vault: Path, tmp_path: Path) -> None:
+    # tmp_path stands in for the home directory, so the rule's home-rooted filter applies.
+    article("systems/a", body=f"First line.\n\nSee `{tmp_path}/gone.md`.\n")
+    (found,) = [f for f in check(vault, home=tmp_path) if f.rule == "cited-path-missing"]
+    on_disk = (vault / found.path).read_text().splitlines()
+    assert "gone.md" in on_disk[found.line - 1]

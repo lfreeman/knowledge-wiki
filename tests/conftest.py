@@ -11,17 +11,25 @@ import pytest
 
 from kb import schema
 
-_KB_VARS = ("KB_CONFIG_DIR", "KB_VAULT", "KB_MODEL")
+_KB_VARS = ("KB_CONFIG_DIR", "KB_VAULT", "KB_REPO_ROOT", "KB_MODEL")
 
 ArticleWriter = Callable[..., Path]
 
 
 @pytest.fixture(autouse=True)
 def kb_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """Point kb at a temp config directory and clear every other KB_* override."""
+    """Point kb at a temp config directory and an empty repo root.
+
+    Both matter. Without the repo root override, anything that resolves an article's
+    `repos:` field scans the real ~/workspace — which reaches outside the test, depends
+    on whatever is checked out, and took the suite from one second to forty.
+    """
     for var in _KB_VARS:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("KB_CONFIG_DIR", str(tmp_path / "config"))
+    empty_root = tmp_path / "no-repos"
+    empty_root.mkdir()
+    monkeypatch.setenv("KB_REPO_ROOT", str(empty_root))
     yield tmp_path / "config"
 
 

@@ -285,12 +285,17 @@ model and runs on a schedule.
 - An unescaped `|` inside `[[...]]` on a table row (§4 rule 2)
 - A wikilink whose target file does not exist
 - A `reference/` article whose `path:` target does not exist
+- A file the article cites by path, under your home directory, that is no longer there
 - Missing required frontmatter field (§2)
 - A malformed date, or `last_updated` earlier than `created`
 - Duplicate `title:` across two articles
 - An orphan — an article nothing links to
 - `last_updated` older than the staleness threshold — **skipped for `status: active`**
 - An article in a directory §1 does not define
+
+Only home-rooted paths are checked. Articles are full of HTTP endpoints, slash commands
+and in-container paths that look like paths and are not defects; checking those produces
+noise, and a check that cries wolf is one nobody reads.
 
 ### Expensive pass — needs a model, runs weekly or monthly
 

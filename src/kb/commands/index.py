@@ -96,7 +96,7 @@ def rebuild(vault: Path, write: bool = True) -> IndexResult:
     backlinks_path = vault / schema.BACKLINKS_FILE
     if write:
         index_path.write_text(index_text, encoding="utf-8")
-        backlinks_path.write_text(json.dumps(backlinks, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        backlinks_path.write_text(render_backlinks(articles), encoding="utf-8")
     return IndexResult(
         articles=len(articles),
         directories=len({article.directory for article in articles}),
@@ -121,6 +121,16 @@ def build_backlinks(articles: list[schema.Article]) -> dict[str, list[str]]:
             if target in known and target != article.slug:
                 inbound[target].add(article.slug)
     return {target: sorted(sources) for target, sources in sorted(inbound.items())}
+
+
+def render_backlinks(articles: list[schema.Article]) -> str:
+    """The `_backlinks.json` text, byte for byte as `kb index` writes it.
+
+    Shared with `kb doctor`, which decides whether the file is up to date by comparing
+    against this. Two spellings of the same JSON would make doctor report drift that
+    does not exist.
+    """
+    return json.dumps(build_backlinks(articles), indent=2, sort_keys=True) + "\n"
 
 
 def render_index(articles: list[schema.Article]) -> str:

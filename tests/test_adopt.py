@@ -247,3 +247,57 @@ def test_move_json_reports_the_links_it_rewrote(repo: Path, vault: Path) -> None
     )
     assert payload["dry_run"] is True
     assert [reference["path"] for reference in payload["links_absolutised"]] == ["other.md"]
+
+
+def test_inspect_searches_the_configured_repo_root_not_just_the_enclosing_repo(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reference that matters most is the one from a *different* repo, because that is
+    # the one that breaks silently on a move. Searching only the enclosing repo missed it.
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n", encoding="utf-8")
+    other = tmp_path / "other-service"
+    other.mkdir()
+    (other / "NOTES.md").write_text("See docs/design.md in the other repo.\n", encoding="utf-8")
+    monkeypatch.setenv("KB_REPO_ROOT", str(tmp_path))
+    inbound = examine(doc).inbound
+    assert [Path(reference.path).name for reference in inbound] == ["NOTES.md"]
+
+
+def test_inspect_reports_which_roots_it_searched(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n", encoding="utf-8")
+    monkeypatch.setenv("KB_REPO_ROOT", str(tmp_path))
+    assert str(tmp_path) in examine(doc).searched
+
+
+def test_inspect_does_not_scan_a_root_twice(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The enclosing repo sits inside the repo root here, so it must not be listed as well.
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n", encoding="utf-8")
+    (repo / "README.md").write_text("docs/design.md\n", encoding="utf-8")
+    monkeypatch.setenv("KB_REPO_ROOT", str(tmp_path))
+    result = examine(doc)
+    assert len(result.searched) == 1
+    assert len(result.inbound) == 1
+
+
+def test_inspect_flags_a_filename_that_other_files_also_use(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doc = repo / "docs" / "architecture.md"
+    doc.write_text("# Architecture\n", encoding="utf-8")
+    other = tmp_path / "other-service" / "wiki"
+    other.mkdir(parents=True)
+    (other / "architecture.md").write_text("# A different architecture doc\n", encoding="utf-8")
+    (other / "index.md").write_text("See architecture.md\n", encoding="utf-8")
+    monkeypatch.setenv("KB_REPO_ROOT", str(tmp_path))
+    result = examine(doc)
+    assert result.ambiguous_name is True
+
+
+def test_a_distinctive_filename_is_not_flagged(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    doc = repo / "docs" / "hash-file-throughput-9e3f.md"
+    doc.write_text("# Distinctive\n", encoding="utf-8")
+    monkeypatch.setenv("KB_REPO_ROOT", str(tmp_path))
+    assert examine(doc).ambiguous_name is False

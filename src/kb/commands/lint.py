@@ -11,6 +11,7 @@ The expensive pass — does this runbook still match the code, do two articles c
 each other — needs a model and is not implemented here.
 """
 
+import re
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -30,6 +31,10 @@ _STYLES = {ERROR: "red", WARN: "yellow"}
 #: How old `last_updated` may get before the article is worth re-reading. Not a defect —
 #: an article can be years old and perfectly true — so it reports as a warning.
 DEFAULT_STALE_MONTHS = 6
+
+#: Any path-shaped span inside backticks. Which of them are worth checking is decided by
+#: `_is_local`, not by this pattern.
+_CITED_PATH = re.compile(r"`(?P<path>(?:~|/)[^`\n]+)`")
 
 
 @dataclass(frozen=True)
@@ -94,9 +99,15 @@ def _render(findings: list[Finding], errors: int) -> None:
     console.print(f"\n{errors} error(s), {len(findings) - errors} warning(s).")
 
 
-def check(vault: Path, stale_months: int = DEFAULT_STALE_MONTHS, today: date | None = None) -> list[Finding]:
+def check(
+    vault: Path,
+    stale_months: int = DEFAULT_STALE_MONTHS,
+    today: date | None = None,
+    home: Path | None = None,
+) -> list[Finding]:
     """Run every cheap rule over the vault and return the findings, sorted by location."""
     today = today or date.today()
+    home = home or Path.home()
     articles, failures = schema.load_vault(vault)
     findings = [
         Finding("frontmatter-unreadable", ERROR, _relative(path, vault), 1, reason) for path, reason in failures
@@ -106,6 +117,7 @@ def check(vault: Path, stale_months: int = DEFAULT_STALE_MONTHS, today: date | N
         findings += _frontmatter(article, vault)
         findings += _reference(article, vault)
         findings += _links(article, vault, known)
+        findings += _cited_paths(article, vault, home)
         findings += _placement(article, vault)
         findings += _staleness(article, vault, stale_months, today)
     findings += _duplicate_titles(articles, vault)
@@ -196,6 +208,40 @@ def _links(article: schema.Article, vault: Path, known: set[str]) -> list[Findin
         target = link.target.split("#")[0].removesuffix(".md")
         if target and target not in known and not (vault / f"{target}.md").exists():
             findings.append(Finding("link-broken", ERROR, where, line, f"{link.raw} points at no such article"))
+    return findings
+
+
+def _is_local(cited: str, home: Path) -> bool:
+    """Whether a path-shaped string could refer to a file on this machine.
+
+    Deliberately narrow. Articles are full of HTTP endpoints (`/permits/rates`), slash
+    commands (`/gaps-review`) and in-container paths (`/proc/1/root/tmp/`) — none exist
+    here, none are defects, and checking them produced sixteen findings and zero real
+    ones. A check that cries wolf is one nobody reads, so only home-rooted paths qualify.
+    """
+    if cited.startswith("~/"):
+        return True
+    return Path(cited).is_relative_to(home)
+
+
+def _cited_paths(article: schema.Article, vault: Path, home: Path) -> list[Finding]:
+    """Files the article points at by path, that are no longer there.
+
+    The cheapest possible evidence that an article has drifted from what it describes,
+    and the only such check that needs neither a model nor the code checked out.
+    """
+    where = _relative(article.path, vault)
+    findings: list[Finding] = []
+    seen: set[str] = set()
+    for number, line in enumerate(article.body.splitlines(), start=1):
+        for match in _CITED_PATH.finditer(line):
+            cited = match.group("path").rstrip(".,;:)")
+            if cited in seen or not _is_local(cited, home) or Path(cited).expanduser().exists():
+                continue
+            seen.add(cited)
+            findings.append(
+                Finding("cited-path-missing", WARN, where, number + article.body_offset, f"{cited} no longer exists")
+            )
     return findings
 
 

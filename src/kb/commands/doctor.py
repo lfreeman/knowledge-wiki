@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .. import config, schema
+from ..commands.index import render_backlinks, render_index
 from ..commands.lint import ERROR, check
 from ..errors import KbError
 from ..output import JsonOption, console, emit_json, table
@@ -64,6 +65,7 @@ def _checks() -> list[Finding]:
         findings.append(_vault(settings.vault))
         findings.append(_index(settings.vault))
         findings.append(_lint(settings.vault))
+    findings.append(_repo_root())
     findings.append(_schema())
     findings.append(_skill_link())
     return findings
@@ -99,16 +101,24 @@ def _vault(vault: Path) -> Finding:
 
 
 def _index(vault: Path) -> Finding:
-    """An index older than an article is an index that no longer lists what is there."""
-    index_path = vault / schema.INDEX_FILE
-    if not index_path.exists():
-        return Finding("index", WARN, f"{index_path} absent; run `kb index`")
-    generated = index_path.stat().st_mtime
-    newer = [path.name for path in schema.article_paths(vault) if path.stat().st_mtime > generated]
-    if newer:
-        listed = ", ".join(sorted(newer)[:3]) + (" …" if len(newer) > 3 else "")
-        return Finding("index", WARN, f"{len(newer)} article(s) changed since the last `kb index`: {listed}")
-    return Finding("index", OK, str(index_path))
+    """Whether the generated files match what regenerating them right now would produce.
+
+    Deliberately a content comparison and not an mtime one. A rebase, a checkout or a
+    fresh clone rewrites every file's mtime without changing a byte, so an mtime check
+    reports the whole vault as stale after each of them — and a check that cries wolf
+    is one nobody reads. Content is the only signal that means what it says.
+    """
+    generated = [vault / name for name in (schema.INDEX_FILE, schema.BACKLINKS_FILE)]
+    missing = [path.name for path in generated if not path.exists()]
+    if missing:
+        return Finding("index", WARN, f"{', '.join(missing)} absent; run `kb index`")
+    articles, _ = schema.load_vault(vault)
+    articles.sort(key=lambda article: article.slug)
+    expected = {schema.INDEX_FILE: render_index(articles), schema.BACKLINKS_FILE: render_backlinks(articles)}
+    drifted = [path.name for path in generated if path.read_text(encoding="utf-8") != expected[path.name]]
+    if drifted:
+        return Finding("index", WARN, f"{' and '.join(drifted)} out of date; run `kb index`")
+    return Finding("index", OK, str(vault / schema.INDEX_FILE))
 
 
 def _lint(vault: Path) -> Finding:
@@ -120,6 +130,15 @@ def _lint(vault: Path) -> Finding:
     if warnings:
         return Finding("lint", WARN, f"{warnings} warning(s); run `kb lint`")
     return Finding("lint", OK, "no findings")
+
+
+def _repo_root() -> Finding:
+    """Where `repos:` names are resolved to checkouts. Nothing can be checked against code without it."""
+    root = config.load_config().repo_root
+    if not root.is_dir():
+        return Finding("repo-root", WARN, f"{root} does not exist; nothing can be checked against its repos")
+    count = sum(1 for child in root.iterdir() if (child / ".git").exists())
+    return Finding("repo-root", OK, f"{root} ({count} repo(s))")
 
 
 def _schema() -> Finding:

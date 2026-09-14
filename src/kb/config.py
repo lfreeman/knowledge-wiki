@@ -25,6 +25,10 @@ DEFAULT_CONFIG_DIR = Path.home() / ".config" / "kb"
 DEFAULT_VAULT = Path.home() / "Documents" / "knowledge"
 DEFAULT_MODEL = "sonnet"
 
+#: Where the repositories named in an article's `repos:` field are checked out. An article
+#: says it covers `some-service`; this is what turns that name into a directory to look in.
+DEFAULT_REPO_ROOT = Path.home() / "workspace"
+
 CONFIG_FILE_NAME = "config.json"
 SCHEMA_FILE_NAME = "SCHEMA.md"
 
@@ -71,7 +75,12 @@ class Config:
     """Resolved settings for one invocation."""
 
     vault: Path
+    repo_root: Path
     model: str
+
+    def repo(self, name: str) -> Path:
+        """Where the repository an article names is expected to be checked out."""
+        return self.repo_root / name
 
 
 def _read_config_file() -> dict[str, object]:
@@ -102,5 +111,6 @@ def load_config() -> Config:
     file_data = _read_config_file()
     return Config(
         vault=Path(_layer(file_data, "vault", "KB_VAULT", str(DEFAULT_VAULT))).expanduser(),
+        repo_root=Path(_layer(file_data, "repo_root", "KB_REPO_ROOT", str(DEFAULT_REPO_ROOT))).expanduser(),
         model=_layer(file_data, "model", "KB_MODEL", DEFAULT_MODEL),
     )

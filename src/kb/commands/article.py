@@ -1,12 +1,13 @@
-"""`kb article` — create an article, or bump the date on one.
+"""`kb article` — create an article, relate two, or bump the date on one.
 
-Both commands exist for the same reason: they are the parts of writing an article that
-are mechanical, and a model doing them by hand gets them subtly wrong. Frontmatter is
-YAML, so a summary containing a colon has to be quoted and a title containing a pipe has
-to survive a table cell; and `last_updated` is the field the whole staleness story rests
-on, which makes it exactly the field that gets forgotten.
+All three commands exist for the same reason: they are the parts of writing an article
+that are mechanical, and a model doing them by hand gets them subtly wrong. Frontmatter
+is YAML, so a summary containing a colon has to be quoted and a title containing a pipe
+has to survive a table cell; `last_updated` is the field the whole staleness story rests
+on, which makes it exactly the field that gets forgotten; and a `related:` link written
+in only one direction leaves the other article reading as an orphan.
 
-The prose is not mechanical, and neither command writes any. Pass the body in with
+The prose is not mechanical, and none of these write any. Pass the body in with
 `--body-file`, or leave it and edit the file afterwards.
 """
 
@@ -21,7 +22,7 @@ from .. import config, schema
 from ..errors import ArticleError, KbError, VaultNotFoundError, run
 from ..output import DryRunOption, JsonOption, console, emit_json
 
-app = typer.Typer(help="Create an article, or bump last_updated on one.", no_args_is_help=True)
+app = typer.Typer(help="Create an article, relate two, or bump last_updated.", no_args_is_help=True)
 
 
 @app.command()
@@ -84,6 +85,55 @@ def new(
 
 
 @app.command()
+def link(
+    first: Annotated[str, typer.Argument(help="Vault-relative slug.")],
+    second: Annotated[str, typer.Argument(help="The slug to link it to.")],
+    one_way: Annotated[
+        bool,
+        typer.Option("--one-way", help="Only add the link to the first article. Rarely what you want."),
+    ] = False,
+    dry_run: DryRunOption = True,
+    as_json: JsonOption = False,
+) -> None:
+    """Relate two articles, writing the link into both of their related: fields.
+
+    Deciding that two articles belong together is judgment. Writing the second half of
+    the pair is bookkeeping, and it is the half that gets forgotten — a one-way link
+    leaves the other article looking like an orphan even though something points at it.
+    """
+    with run():
+        vault = _vault()
+        pairs = [(first, second)] if one_way else [(first, second), (second, first)]
+        changed: list[dict[str, str]] = []
+        for source, target in pairs:
+            source_path, target_path = _target(vault, source), _target(vault, target)
+            for path, slug in ((source_path, source), (target_path, target)):
+                if not path.is_file():
+                    raise KbError(f"no article at {path} (from slug {slug!r})")
+            wikilink = f"[[{_slug(vault, target_path)}|{_title(target_path)}]]"
+            fields, body = _fields(source_path)
+            related = list(fields.get("related") or [])
+            already = any(item.split("|")[0].strip("[ ") == _slug(vault, target_path) for item in related)
+            if already:
+                changed.append({"article": source, "link": wikilink, "action": "already present"})
+                continue
+            related.append(wikilink)
+            fields["related"] = related
+            fields["last_updated"] = date.today()
+            if not dry_run:
+                source_path.write_text(schema.render_article(fields, body), encoding="utf-8")
+            changed.append({"article": source, "link": wikilink, "action": "added"})
+        if as_json:
+            emit_json({"changed": changed, "dry_run": dry_run})
+            return
+        for entry in changed:
+            verb = "would add" if dry_run and entry["action"] == "added" else entry["action"]
+            console.print(f"{entry['article']}: {verb} {entry['link']}")
+        if dry_run and any(entry["action"] == "added" for entry in changed):
+            console.print("[bold]Pass --no-dry-run to do it.[/bold]")
+
+
+@app.command()
 def touch(
     slugs: Annotated[list[str], typer.Argument(help="Vault-relative slugs to bump.")],
     on: Annotated[str | None, typer.Option("--on", help="Date to set. Defaults to today.")] = None,
@@ -99,14 +149,7 @@ def touch(
             target = _target(vault, slug)
             if not target.is_file():
                 raise KbError(f"no article at {target}")
-            text = target.read_text(encoding="utf-8")
-            try:
-                front, body, _ = schema.split_frontmatter(text)
-            except ArticleError as exc:
-                raise KbError(f"{target}: {exc}") from exc
-            fields = yaml.safe_load(front) or {}
-            if not isinstance(fields, dict):
-                raise KbError(f"{target}: frontmatter must be a YAML mapping")
+            fields, body = _fields(target)
             was = str(fields.get("last_updated", ""))
             fields["last_updated"] = stamp
             if not dry_run:
@@ -120,6 +163,29 @@ def touch(
             console.print(f"{'Would bump' if dry_run else 'Bumped'} [bold]{entry['slug']}[/bold]  {arrow}")
         if dry_run:
             console.print("[bold]Pass --no-dry-run to do it.[/bold]")
+
+
+def _fields(path: Path) -> tuple[dict[str, Any], str]:
+    """An article's frontmatter as a mapping, plus its body."""
+    try:
+        front, body, _ = schema.split_frontmatter(path.read_text(encoding="utf-8"))
+    except ArticleError as exc:
+        raise KbError(f"{path}: {exc}") from exc
+    loaded = yaml.safe_load(front) or {}
+    if not isinstance(loaded, dict):
+        raise KbError(f"{path}: frontmatter must be a YAML mapping")
+    return loaded, body
+
+
+def _title(path: Path) -> str:
+    """An article's own title, so a link's alias never has to be typed twice."""
+    fields, _ = _fields(path)
+    title = fields.get("title")
+    return str(title) if title else path.stem
+
+
+def _slug(vault: Path, path: Path) -> str:
+    return path.relative_to(vault).with_suffix("").as_posix()
 
 
 def _date(value: str | None) -> date:

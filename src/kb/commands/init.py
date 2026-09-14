@@ -35,7 +35,8 @@ def init(
             (root / name).mkdir(parents=True, exist_ok=True)
         config_path = config.config_file()
         config.ensure_config_dir()
-        settings = {"vault": str(root), "model": config.load_config().model}
+        current = config.load_config()
+        settings = {"vault": str(root), "repo_root": str(current.repo_root), "model": current.model}
         config_path.write_text(_json(settings), encoding="utf-8")
         result = rebuild(root)
         if as_json:

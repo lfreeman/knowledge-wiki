@@ -67,6 +67,7 @@ the vault root when clicked. It looks right in the raw markdown, which is why it
 - **Inside a markdown table, escape the pipe:** `[[path/slug\|Display Title]]`. An unescaped
   `|` in a table row is a column separator and splits the link across two cells.
 - Add the link in **both** directions: the new article's `related:` and the existing one's.
+  `kb article link A B` writes both halves for you — use it rather than editing two files.
 
 `kb lint` checks all three. Run it.
 
@@ -102,11 +103,19 @@ worse than nothing. `kb adopt inspect` gathers the evidence; you decide.
 
 ```bash
 kb adopt inspect path/to/doc.md --json
-kb adopt inspect path/to/doc.md --search ~/some/other/tree     # extra place to look for inbound refs
+kb adopt inspect path/to/doc.md --search ~/some/other/tree     # an additional place to look
 ```
 
 It reports whether the document names the repo it is sitting in, whether that repo's own
 `CLAUDE.md` or `README.md` lists it, which relative links it contains, and what points at it.
+It searches the enclosing repo **and** the configured repo root, because the reference that
+matters most is usually the one from a different repo — that is the one that breaks silently.
+
+Two limits to read around. It searches for the file's **current** name, so it cannot see
+references to a name the file has already been renamed away from. And when `ambiguous_name`
+is true, other files share this filename — `architecture.md` and `README.md` live in half the
+repositories on a machine — so a hit may point at a different file entirely. Open the cited
+line before believing it.
 
 | What it is | Signal | What to do |
 |---|---|---|
@@ -157,6 +166,9 @@ kb article new ... --no-dry-run
 kb article touch systems/other-slug --no-dry-run
 kb article touch systems/a systems/b --no-dry-run     # several at once
 
+# relate two articles — writes the link into both, and bumps both dates
+kb article link systems/a runbooks/b --no-dry-run
+
 # adopt a document from disk
 kb adopt inspect path/to/doc.md --json
 kb adopt point path/to/doc.md --title "..." --summary "..." --repo some-service --no-dry-run
@@ -164,6 +176,13 @@ kb adopt move  path/to/doc.md --to runbooks --title "..." --summary "..." --no-d
 kb adopt move  path/to/doc.md --to runbooks --source symlink --no-dry-run   # has inbound refs
 kb adopt move  path/to/doc.md --to learning --status active --no-dry-run    # live state
 ```
+
+If the vault is missing a directory the article needs, `kb init` creates the missing ones
+and leaves everything else alone.
+
+A document that is not markdown — HTML, a PDF — cannot carry frontmatter, so `adopt move`
+will not take it. Move the file into the vault yourself and run `kb adopt point` at its new
+location, which gives it a findable stub without pretending it is an article.
 
 `--repo`, `--system`, `--ticket`, `--related` and `--source` (on `article new`) are repeatable.
 `--source` on `adopt move` is different: it is `remove`, `symlink`, or `keep`, and says what
