@@ -26,11 +26,17 @@ kb schema --path   # print where it lives
   systems/                  how a thing works, usually across services
   runbooks/                 operational procedures
   guides/                   long-form technical references that live HERE
-  learning/                 active learning plans — live state, mutates every session
+  learning/                 topics and active plans — live state, mutates every session
+  learning/learning-gaps    the capture inbox for things not yet understood (kb gap)
   research/                 open investigations, reading notes, comparisons
   journal/                  dated entries synthesized from a journal corpus
   reference/                pointer articles → documents that stay in their own repo
 ```
+
+A **topic** under `learning/` is one article that grows. It starts as a list of what is
+not understood yet and gains ordered steps and a progress log only if it earns them —
+in the same file. There is no separate "topic" and "plan" document, because needing to
+create a heavy plan is what stops anything ever being promoted.
 
 **`guides/` and `learning/` hold the documents themselves, not pointers.** That is the
 distinction that decides whether a file moves. `reference/` is for documents that belong
@@ -76,13 +82,26 @@ note: <optional free text about the article's placement>
 |---|---|
 | `title` | The human title. Does **not** determine the filename or resolve links. |
 | `type` | One of the values listed above. Describes the document; see §3 for its home. |
-| `status` | `stable` by default. `active` marks a document that mutates every session. |
+| `status` | `stable` by default. `active` mutates every session. `superseded` is history — see below. |
 | `created` / `last_updated` | `YYYY-MM-DD`. Bump `last_updated` on every edit. |
 | `summary` | Plain prose, no markdown, no line breaks. Rendered into `_index.md`. |
 | `tickets` / `repos` / `systems` | Flat lists of bare identifiers. `repos` is what makes an article auto-checkable — see §8. |
 | `related` | List of quoted wikilinks in full `[[path/slug\|Title]]` form. Add links in **both** directions. |
 | `sources` | Raw entry IDs, never file paths. |
 | `path` | Absolute or `~`-relative path to the real document. `reference/` only. |
+
+### `status: superseded`
+
+An article that no longer describes how things are — replaced by another article, reversed
+by a later decision, or a plan whose work has landed. It is **kept, not deleted**: what was
+decided and why stays true as history, and deleting it loses the reasoning.
+
+What the status buys is retrieval. A superseded article still matches a search, but ranks
+below current material, so a shipped plan can never outrank the article describing what
+actually exists. `kb lint` also stops checking its age — a superseded article is expected
+never to change again, so calling it stale is noise.
+
+Say in the article what replaced it, and link there.
 
 ### Filenames
 
@@ -91,6 +110,9 @@ grep and scripts all work better with them. The human title lives in `title:` an
 wikilink alias.
 
 Incident articles are prefixed with their date: `incidents/YYYY-MM-DD-short-slug.md`.
+A slug that carries a date **sets `created:`** — `kb article new` reads it, so a backdated
+article needs no extra flag. Passing `--created` as well is allowed and wins, with a
+warning if the two disagree.
 
 ---
 
@@ -288,9 +310,10 @@ model and runs on a schedule.
 - A file the article cites by path, under your home directory, that is no longer there
 - Missing required frontmatter field (§2)
 - A malformed date, or `last_updated` earlier than `created`
+- A date-prefixed slug that disagrees with `created:` — the date is load-bearing on exactly those articles
 - Duplicate `title:` across two articles
 - An orphan — an article nothing links to
-- `last_updated` older than the staleness threshold — **skipped for `status: active`**
+- `last_updated` older than the staleness threshold — **skipped for `active` and `superseded`**, whose age says nothing
 - An article in a directory §1 does not define
 
 Only home-rooted paths are checked. Articles are full of HTTP endpoints, slash commands

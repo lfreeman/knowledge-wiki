@@ -279,3 +279,33 @@ def test_a_cited_path_finding_points_at_the_right_line(article: ArticleWriter, v
     (found,) = [f for f in check(vault, home=tmp_path) if f.rule == "cited-path-missing"]
     on_disk = (vault / found.path).read_text().splitlines()
     assert "gone.md" in on_disk[found.line - 1]
+
+
+def test_it_finds_a_slug_date_that_disagrees_with_created(article: ArticleWriter, vault: Path) -> None:
+    # The date is load-bearing on exactly these articles, so a silent disagreement is
+    # worse here than anywhere else.
+    article("incidents/2026-06-25-a-thing", created="2026-09-16", type="incident")
+    (found,) = [f for f in check(vault) if f.rule == "slug-date-mismatch"]
+    assert found.severity == WARN
+    assert "2026-06-25" in found.detail
+
+
+def test_a_slug_date_that_agrees_is_clean(article: ArticleWriter, vault: Path) -> None:
+    article("incidents/2026-06-25-a-thing", created="2026-06-25", type="incident")
+    assert [f for f in check(vault) if f.rule == "slug-date-mismatch"] == []
+
+
+def test_an_undated_slug_is_never_a_mismatch(article: ArticleWriter, vault: Path) -> None:
+    article("runbooks/some-procedure", created="2026-09-16")
+    assert [f for f in check(vault) if f.rule == "slug-date-mismatch"] == []
+
+
+def test_a_superseded_article_is_never_stale(article: ArticleWriter, vault: Path) -> None:
+    # It is expected never to change again, so its age says nothing about its truth.
+    article("research/old-plan", status="superseded", last_updated="2020-01-01")
+    assert not [f for f in check(vault, today=date(2026, 9, 16)) if f.rule == "stale"]
+
+
+def test_superseded_is_a_valid_status(article: ArticleWriter, vault: Path) -> None:
+    article("research/old-plan", status="superseded")
+    assert "frontmatter-invalid-status" not in _rules(check(vault), "research/old-plan.md")

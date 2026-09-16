@@ -39,10 +39,35 @@ def test_a_body_only_match_is_still_returned(article: ArticleWriter, vault: Path
     assert match.matched == ["body"]
 
 
-def test_every_term_must_appear(article: ArticleWriter, vault: Path) -> None:
+def test_an_article_matching_every_term_outranks_a_partial_one(article: ArticleWriter, vault: Path) -> None:
+    # Deliberately not a strict AND: a four-word query that nothing satisfies used to
+    # return nothing, while an article matching three of four sat there unmentioned.
     article("guides/one", title="S3 Streaming", body="About streaming.\n")
     article("guides/two", title="Kafka Streaming", body="About kafka.\n")
-    assert [match.slug for match in find(vault, ["s3", "streaming"])] == ["guides/one"]
+    matches = find(vault, ["s3", "streaming"])
+    assert [match.slug for match in matches] == ["guides/one", "guides/two"]
+    assert matches[0].terms_found == ["s3", "streaming"]
+    assert matches[1].terms_missing == ["s3"]
+
+
+def test_an_article_matching_no_term_is_not_returned(article: ArticleWriter, vault: Path) -> None:
+    article("guides/one", title="S3 Streaming")
+    assert find(vault, ["kafka", "rabbitmq"]) == []
+
+
+def test_the_output_says_how_many_matched_every_term(article: ArticleWriter, vault: Path) -> None:
+    article("guides/one", title="S3 Streaming")
+    article("guides/two", title="Kafka Streaming")
+    output = runner.invoke(app, ["search", "s3", "streaming"]).output
+    assert "1 with all 2 of 2" in output
+    assert "1 with 1 of 2" in output
+
+
+def test_it_warns_when_nothing_matched_every_term(article: ArticleWriter, vault: Path) -> None:
+    # Otherwise you cannot tell "nothing covers this" from "one of my words was wrong".
+    article("guides/one", title="S3 Streaming")
+    output = runner.invoke(app, ["search", "s3", "kafka"]).output
+    assert "Nothing matched all 2 terms" in output
 
 
 def test_terms_may_match_in_different_fields(article: ArticleWriter, vault: Path) -> None:
@@ -109,9 +134,9 @@ def test_the_command_prints_an_absolute_path(article: ArticleWriter, vault: Path
     assert str(vault / "guides" / "one") in output.replace("\n", "")
 
 
-def test_the_command_shows_the_score(article: ArticleWriter, vault: Path) -> None:
+def test_the_command_shows_how_many_terms_each_result_matched(article: ArticleWriter, vault: Path) -> None:
     article("guides/one", title="S3 Streaming")
-    assert "score" in runner.invoke(app, ["search", "s3"]).output
+    assert "1/1 terms" in runner.invoke(app, ["search", "s3"]).output
 
 
 def test_limit_caps_the_results(article: ArticleWriter, vault: Path) -> None:
@@ -133,3 +158,55 @@ def test_json_carries_what_an_agent_needs_to_decide(article: ArticleWriter, vaul
 
 def test_a_missing_vault_is_a_one_line_error(tmp_path: Path) -> None:
     assert runner.invoke(app, ["search", "s3"], env={"KB_VAULT": str(tmp_path / "nope")}).exit_code == 1
+
+
+def test_a_question_finds_an_article_that_uses_a_different_word_form(
+    article: ArticleWriter, vault: Path
+) -> None:
+    # The real miss: the article says "population" and "generator", the question says
+    # "populate" and "generate". Substring matching cannot bridge that, and it is exactly
+    # the pair a question and an article naturally disagree on.
+    article("research/gen", title="Location Data Generator", summary="Shapes population density.")
+    assert [match.slug for match in find(vault, ["populate"])] == ["research/gen"]
+    assert [match.slug for match in find(vault, ["generate"])] == ["research/gen"]
+
+
+def test_stemming_converges_for_verb_and_noun_forms() -> None:
+    from kb.commands.search import _stem
+
+    assert _stem("populate") == _stem("population")
+    assert _stem("generate") == _stem("generator") == _stem("generation")
+    assert _stem("timeouts") == _stem("timeout")
+
+
+def test_short_words_are_not_stemmed_into_each_other() -> None:
+    from kb.commands.search import _stem
+
+    assert _stem("data") == "data"
+    assert _stem("s3") == "s3"
+    assert _stem("es") == "es"
+
+
+def test_an_exact_match_still_outranks_a_stemmed_one(article: ArticleWriter, vault: Path) -> None:
+    article("research/exact", title="Generate Data", summary="About generate.")
+    article("research/stemmed", body="Something about a generator.\n")
+    matches = find(vault, ["generate"])
+    assert matches[0].slug == "research/exact"
+
+
+def test_stemming_does_not_make_everything_match(article: ArticleWriter, vault: Path) -> None:
+    article("research/gen", title="Generator", summary="Shapes population density.")
+    article("runbooks/unrelated", title="Restarting Something", body="Nothing in common.\n")
+    assert [match.slug for match in find(vault, ["populate"])] == ["research/gen"]
+
+
+def test_a_superseded_article_ranks_below_a_current_one(article: ArticleWriter, vault: Path) -> None:
+    # A plan whose work shipped must never outrank the article describing what exists now.
+    article("research/old-plan", title="Widget Plan", summary="How widgets will work.", status="superseded")
+    article("systems/widgets", title="Widget System", summary="How widgets work.")
+    assert [match.slug for match in find(vault, ["widget"])] == ["systems/widgets", "research/old-plan"]
+
+
+def test_a_superseded_article_is_still_found(article: ArticleWriter, vault: Path) -> None:
+    article("research/old-plan", title="Widget Plan", status="superseded")
+    assert [match.slug for match in find(vault, ["widget"])] == ["research/old-plan"]

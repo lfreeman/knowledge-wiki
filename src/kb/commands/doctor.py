@@ -149,16 +149,20 @@ def _schema() -> Finding:
 
 
 def _skill_link() -> Finding:
-    link = config.skill_link()
-    source = config.skill_source()
-    if not link.exists() and not link.is_symlink():
-        return Finding("skill-link", WARN, f"{link} absent; run `kb skill install`")
-    if not link.is_symlink():
-        return Finding("skill-link", CRIT, f"{link} is a directory, not a link to {source}")
-    resolved = link.resolve()
-    if resolved != source.resolve():
-        return Finding("skill-link", CRIT, f"{link} points at {resolved}, expected {source}")
-    return Finding("skill-link", OK, f"{link} -> {resolved}")
+    """Every shipped skill, since a half-installed set is the confusing case."""
+    missing: list[str] = []
+    wrong: list[str] = []
+    for name in config.SKILL_NAMES:
+        link, source = config.skill_link(name), config.skill_source(name)
+        if not link.exists() and not link.is_symlink():
+            missing.append(name)
+        elif not link.is_symlink() or link.resolve() != source.resolve():
+            wrong.append(name)
+    if wrong:
+        return Finding("skill-links", CRIT, f"not pointing at this checkout: {', '.join(wrong)}")
+    if missing:
+        return Finding("skill-links", WARN, f"absent: {', '.join(missing)}; run `kb skill install`")
+    return Finding("skill-links", OK, f"{len(config.SKILL_NAMES)} skill(s) linked into {config.CLAUDE_SKILLS_DIR}")
 
 
 def _worst(findings: list[Finding]) -> str:

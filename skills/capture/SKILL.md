@@ -54,10 +54,34 @@ the summaries of everything that comes back.
 4. **Write the prose.** For a new article, write the body to a scratch file and pass it to
    `kb article new --body-file`; that way the frontmatter is generated rather than hand-typed.
    For an update, edit the file directly and then `kb article touch` it.
+
+   **Read what `kb article new` prints before the preview.** It lists existing articles
+   sharing any `systems:`, `repos:` or `tickets:` value with the one you are about to write.
+   That is the update-vs-create question asked again at the last possible moment — a search
+   run earlier in the session cannot see what landed since. If one of them should have been
+   updated instead, stop and update it.
+
+   **Never hand-edit frontmatter arrays.** They are single long lines of flow-style YAML.
+   `--related` writes the reverse link into the other article for you, `kb article link` is
+   safe to run afterwards because it de-duplicates, and `kb article tag` adds or removes
+   `systems:`, `repos:` and `tickets:` on articles that already exist.
 5. **Show the user the preview and wait.** They approve before anything is written.
-6. **Write**, then run `kb index --no-dry-run`-style bookkeeping: `kb index` and `kb lint`.
+6. **Write**, then run `kb index` and `kb lint`. **`kb index` takes no `--no-dry-run`** —
+   it regenerates derived data and writes by default, unlike every other write command.
    `lint` is cheap and catches the link mistakes that are invisible in raw markdown.
-7. **Fix what lint reports** before finishing. A finding you leave behind is one the user
+7. **Close the gaps this answered.** Capture is the moment the inbox should shrink, and it
+   is the step most likely to be skipped because the writing already feels finished. Run
+   `kb gap list --state open --json` and look for gaps the new article answers — they are
+   often ones logged earlier in this very session.
+
+   ```bash
+   kb gap close g-0051 g-0052 --note "[[runbooks/some-slug|Some Article Title]]" --no-dry-run
+   kb gap promote g-0060 --to learning/<topic> --no-dry-run   # if it belongs to a topic instead
+   ```
+
+   Close a gap only when the article genuinely answers it — closing is a claim the user now
+   knows it. Say which ids you closed in your end-of-turn note.
+8. **Fix what lint reports** before finishing. A finding you leave behind is one the user
    inherits.
 
 ---
@@ -95,9 +119,17 @@ something that is not recoverable from the code and the commit history.
 - **Tag `repos:` whenever the article is about code.** It is what lets the scheduled lint pass
   tell that a repo has moved since the article was written. An article with no `repos:` can
   never be auto-checked, and that is a permanent cost, not a formality.
-- **Incidents get a date-prefixed slug** — `incidents/YYYY-MM-DD-short-slug`.
+- **Incidents get a date-prefixed slug** — `incidents/YYYY-MM-DD-short-slug`. That date
+  **sets `created:`**: `kb article new` reads it from the slug, so a backdated article needs
+  no extra flag. Use `--created YYYY-MM-DD` only for an undated slug that describes older
+  work; if both are given and disagree, `kb` warns and `--created` wins.
 - **Say what expires.** In an incident article, the facts stay true but the workaround does
   not. Write "until <version> ships, the workaround is X" rather than "the workaround is X".
+- **Retire, do not delete.** When an article stops describing how things are — a plan whose
+  work shipped, a design that was replaced — set `status: superseded`, say in it what
+  replaced it, and link there. It keeps ranking below current material in search instead of
+  competing with it, and lint stops checking its age. Deleting it would lose the reasoning,
+  which is the expensive half.
 
 ---
 
@@ -177,14 +209,22 @@ kb doctor --json                    # is everything still wired up
 kb article new runbooks/some-slug \
   --title "Some Article Title" \
   --summary "What this establishes, in one or two sentences." \
+  --created 2026-01-31 \
   --repo some-service --system SomeComponent --ticket PROJ-1234 \
   --related "[[systems/other-slug|Other Article Title]]" \
   --body-file /tmp/body.md
 kb article new ... --no-dry-run
 
+# close the gaps the new article answers
+kb gap list --state open --json
+kb gap close <id>... --note "[[dir/slug|Title]]" --no-dry-run
+
 # after editing an existing article by hand
 kb article touch systems/other-slug --no-dry-run
 kb article touch systems/a systems/b --no-dry-run     # several at once
+
+# add tags to articles that already exist, rather than editing the YAML by hand
+kb article tag systems/a systems/b --system geohash --repo some-service --no-dry-run
 
 # relate two articles — writes the link into both, and bumps both dates
 kb article link systems/a runbooks/b --no-dry-run
@@ -215,9 +255,33 @@ A document that is not markdown — HTML, a PDF — cannot carry frontmatter, so
 will not take it. Move the file into the vault yourself and run `kb adopt point` at its new
 location, which gives it a findable stub without pretending it is an article.
 
-`--repo`, `--system`, `--ticket`, `--related` and `--source` (on `article new`) are repeatable.
-`--source` on `adopt move` is different: it is `remove`, `symlink`, or `keep`, and says what
-happens to the original file.
+### Every option, so you never have to probe for one
+
+Each list is complete. Every write also takes `--dry-run/--no-dry-run`, and every command
+takes `--json`.
+
+| Command | Arguments | Options |
+|---|---|---|
+| `kb article new` | `<dir>/<slug>` | `--title` `--summary` `--type` `--status` `--created` `--body-file` `--path` · repeatable: `--repo` `--system` `--ticket` `--related` `--source` |
+| `kb article link` | `<slug> <slug>` | `--one-way` |
+| `kb article tag` | `<slug>…` | `--system` `--repo` `--ticket` (all repeatable) · `--remove` |
+| `kb article touch` | `<slug>…` | `--on` |
+| `kb adopt inspect` | `<path>` | `--search` (repeatable) |
+| `kb adopt move` | `<path>` | `--to` `--title` `--summary` `--type` `--status` `--slug` `--created` `--note` `--source` `--from-file` · repeatable: `--repo` `--system` `--ticket` `--related` |
+| `kb adopt point` | `<path>` | `--title` `--summary` `--slug` · repeatable: `--repo` `--system` `--ticket` `--related` |
+| `kb gap add` | `"<text>"` | `--area` `--note` `--on` |
+| `kb gap list` | — | `--area` `--state` |
+| `kb gap promote` | `<id>…` | `--to` |
+| `kb gap close` | `<id>…` | `--note` |
+| `kb search` | `<terms>…` | `--limit` |
+
+`kb index` is the one write with no `--dry-run`: it regenerates derived data, so a
+preview-first default would be friction on the most-run command.
+
+Two traps in that table. **`--source` means different things**: on `article new` it is a
+repeatable raw-entry id, and on `adopt move` it is one of `remove`, `symlink` or `keep`,
+saying what happens to the original file. And **`--type` is the article type**
+(`runbook`, `incident`, …), not a file type.
 
 **Write the body to a scratch file rather than passing prose through shell quoting.** Article
 text holds apostrophes, backticks, `$` and newlines, all of which a shell mangles silently.

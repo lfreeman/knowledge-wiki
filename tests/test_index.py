@@ -189,3 +189,10 @@ def test_json_output_is_parseable_and_counts_what_it_wrote(article: ArticleWrite
 def test_a_missing_vault_is_a_one_line_error(tmp_path: Path) -> None:
     result = runner.invoke(app, ["index"], env={"KB_VAULT": str(tmp_path / "nope")})
     assert result.exit_code == 1
+
+
+def test_a_superseded_article_is_marked_in_the_index(article: ArticleWriter, vault: Path) -> None:
+    article("research/old-plan", status="superseded")
+    rebuild(vault)
+    (row,) = [line for line in _rows((vault / schema.INDEX_FILE).read_text()) if "research/old-plan" in line]
+    assert "*superseded*" in row

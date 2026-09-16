@@ -92,6 +92,15 @@ def test_skill_install_creates_a_symlink_to_the_repo(skills_dir: Path) -> None:
     assert link.resolve() == config.skill_source().resolve()
 
 
+def test_every_shipped_skill_declares_a_name_and_description() -> None:
+    for name in config.SKILL_NAMES:
+        text = (config.skill_source(name) / "SKILL.md").read_text()
+        front, _, _ = schema.split_frontmatter(text)
+        assert f"name: {name}" in front, f"{name}/SKILL.md declares the wrong name"
+        description = [line for line in front.splitlines() if line.startswith("description:")]
+        assert description and len(description[0]) > len("description: "), name
+
+
 def test_skill_install_refuses_to_replace_a_real_directory(skills_dir: Path) -> None:
     occupied = skills_dir / config.SKILL_NAME
     occupied.mkdir()
@@ -108,11 +117,28 @@ def test_skill_install_repoints_a_stale_symlink(skills_dir: Path, tmp_path: Path
     assert (skills_dir / config.SKILL_NAME).resolve() == config.skill_source().resolve()
 
 
-def test_skill_status_reports_the_link_target(skills_dir: Path) -> None:
+def test_skill_status_reports_every_link(skills_dir: Path) -> None:
     runner.invoke(app, ["skill", "install", "--no-dry-run"])
     payload = json.loads(runner.invoke(app, ["skill", "status", "--json"]).output)
-    assert payload["installed"] is True
-    assert payload["target"] == str(config.skill_source().resolve())
+    assert payload["installed"] == len(config.SKILL_NAMES)
+    by_name = {row["name"]: row for row in payload["skills"]}
+    assert set(by_name) == set(config.SKILL_NAMES)
+    assert by_name["gap"]["target"] == str(config.skill_source("gap").resolve())
+
+
+def test_install_links_every_shipped_skill(skills_dir: Path) -> None:
+    runner.invoke(app, ["skill", "install", "--no-dry-run"])
+    for name in config.SKILL_NAMES:
+        assert (skills_dir / name).is_symlink(), f"{name} was not linked"
+
+
+def test_doctor_warns_when_only_some_skills_are_linked(skills_dir: Path, vault: Path) -> None:
+    runner.invoke(app, ["skill", "install", "--no-dry-run"])
+    (skills_dir / "gap").unlink()
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).output)
+    (finding,) = [item for item in payload["findings"] if item["check"] == "skill-links"]
+    assert finding["status"] == "warn"
+    assert "gap" in finding["detail"]
 
 
 def test_the_skill_file_declares_a_name_and_a_description() -> None:
@@ -123,17 +149,18 @@ def test_the_skill_file_declares_a_name_and_a_description() -> None:
     assert description and len(description[0]) > len("description: ")
 
 
-def test_the_skill_only_tells_claude_to_call_commands_that_exist() -> None:
+def test_no_skill_tells_claude_to_call_a_command_that_does_not_exist() -> None:
     # A skill naming a command the CLI does not have is a skill that fails at the moment
     # it is needed, in a session nobody is watching.
     import re
 
-    text = (config.skill_source() / "SKILL.md").read_text()
-    named = {match.group(1) for match in re.finditer(r"^kb ([a-z]+)", text, re.MULTILINE)}
-    named |= {match.group(1) for match in re.finditer(r"`kb ([a-z]+)", text)}
     registered = {command.name for command in app.registered_commands}
     registered |= {group.name for group in app.registered_groups}
-    assert named <= registered, f"SKILL.md names commands kb does not have: {sorted(named - registered)}"
+    for name in config.SKILL_NAMES:
+        text = (config.skill_source(name) / "SKILL.md").read_text()
+        named = {match.group(1) for match in re.finditer(r"^kb ([a-z]+)", text, re.MULTILINE)}
+        named |= {match.group(1) for match in re.finditer(r"`kb ([a-z]+)", text)}
+        assert named <= registered, f"{name}/SKILL.md names commands kb lacks: {sorted(named - registered)}"
 
 
 # --- doctor ---
@@ -149,7 +176,7 @@ def test_doctor_reports_ok_on_a_healthy_vault(article: ArticleWriter, vault: Pat
     assert statuses["vault"] in {"ok", "warn"}
     assert statuses["index"] == "ok"
     assert statuses["schema"] == "ok"
-    assert statuses["skill-link"] == "ok"
+    assert statuses["skill-links"] == "ok"
 
 
 def test_doctor_warns_when_the_vault_is_not_a_git_repository(article: ArticleWriter, vault: Path) -> None:
@@ -277,3 +304,30 @@ def test_doctor_warns_when_the_repo_root_is_missing(tmp_path: Path, monkeypatch:
     payload = json.loads(runner.invoke(app, ["doctor", "--json"]).output)
     (finding,) = [item for item in payload["findings"] if item["check"] == "repo-root"]
     assert finding["status"] == "warn"
+
+
+def test_no_skill_documents_an_option_that_does_not_exist() -> None:
+    """The skills publish exhaustive option tables, which go stale the moment a flag moves.
+
+    This is the same failure as naming a command that does not exist: it surfaces at the
+    moment the skill is needed, in a session nobody is watching.
+    """
+    import inspect
+    import re
+
+    from kb.commands import adopt, article, gap, index, lint, search
+
+    declared: set[str] = {"--json", "--dry-run", "--no-dry-run", "--help"}
+    for module in (adopt, article, gap, index, lint, search):
+        source = inspect.getsource(module)
+        declared |= set(re.findall(r'typer\.Option\(\s*"(--[a-z][a-z0-9-]*)', source))
+        for pair in re.findall(r'"(--[a-z][a-z0-9-]*/--[a-z][a-z0-9-]*)"', source):
+            declared |= set(pair.split("/"))
+
+    for name in config.SKILL_NAMES:
+        text = (config.skill_source(name) / "SKILL.md").read_text()
+        # Only flags written as code spans in the option tables and examples.
+        used = set(re.findall(r"`(--[a-z][a-z0-9-]*)`", text))
+        used |= set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", text))
+        unknown = {flag for flag in used if flag not in declared}
+        assert not unknown, f"{name}/SKILL.md documents flags kb does not have: {sorted(unknown)}"

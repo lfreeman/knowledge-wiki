@@ -53,11 +53,18 @@ def new(
         if target.exists():
             raise KbError(f"{target} already exists; edit it instead — see the update-vs-create rule in `kb schema`")
         directory = slug.split("/")[0]
+        from_slug = schema.slug_date(slug)
+        given = _date(created) if created else None
+        if given and from_slug and given != from_slug:
+            console.print(
+                f"[yellow]warning:[/yellow] the slug says {from_slug} but --created says {given}. "
+                "Using --created; rename the slug if that is wrong."
+            )
         fields: dict[str, Any] = {
             "title": title,
             "type": kind or _type_for(directory) or "concept",
             "status": status,
-            "created": _date(created),
+            "created": given or from_slug or date.today(),
             "last_updated": date.today(),
             "summary": summary,
             "tickets": tickets or None,
@@ -69,12 +76,36 @@ def new(
         }
         body = body_file.expanduser().read_text(encoding="utf-8") if body_file else f"# {title}\n"
         text = schema.render_article({k: v for k, v in fields.items() if v is not None}, body)
+        overlap = _overlapping(vault, fields, skip=slug)
         if not dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
+        backlinks = _write_backlinks(vault, target, related or [], dry_run)
         if as_json:
-            emit_json({"slug": slug, "target": str(target), "dry_run": dry_run, "article": text})
+            emit_json(
+                {
+                    "slug": slug,
+                    "target": str(target),
+                    "dry_run": dry_run,
+                    "article": text,
+                    "overlaps": [{"slug": s, "title": ti, "shared": sh} for s, ti, sh in overlap],
+                    "backlinks": backlinks,
+                }
+            )
             return
+        if overlap:
+            console.print(
+                f"\n[yellow]{len(overlap)} existing article(s) share a system, repo or ticket "
+                "with this one[/yellow] — check none of them should be updated instead:"
+            )
+            for other, other_title, shared in overlap[:8]:
+                console.print(f"  [bold]{other}[/bold]  [dim]{other_title}[/dim]")
+                console.print(f"    shares: {', '.join(shared)}")
+            if len(overlap) > 8:
+                console.print(f"  [dim]…and {len(overlap) - 8} more[/dim]")
+            console.print()
+        for other in backlinks:
+            console.print(f"{'Would add' if dry_run else 'Added'} the reverse link in [bold]{other}[/bold]")
         console.print(f"{'Would write' if dry_run else 'Wrote'} [bold]{target}[/bold]")
         if dry_run:
             console.print("\n[dim]--- article that would be written ---[/dim]")
@@ -110,19 +141,9 @@ def link(
             for path, slug in ((source_path, source), (target_path, target)):
                 if not path.is_file():
                     raise KbError(f"no article at {path} (from slug {slug!r})")
-            wikilink = f"[[{_slug(vault, target_path)}|{_title(target_path)}]]"
-            fields, body = _fields(source_path)
-            related = list(fields.get("related") or [])
-            already = any(item.split("|")[0].strip("[ ") == _slug(vault, target_path) for item in related)
-            if already:
-                changed.append({"article": source, "link": wikilink, "action": "already present"})
-                continue
-            related.append(wikilink)
-            fields["related"] = related
-            fields["last_updated"] = date.today()
-            if not dry_run:
-                source_path.write_text(schema.render_article(fields, body), encoding="utf-8")
-            changed.append({"article": source, "link": wikilink, "action": "added"})
+            wikilink = _wikilink(vault, target_path)
+            added = _add_related(source_path, target_path, vault, dry_run)
+            changed.append({"article": source, "link": wikilink, "action": "added" if added else "already present"})
         if as_json:
             emit_json({"changed": changed, "dry_run": dry_run})
             return
@@ -130,6 +151,68 @@ def link(
             verb = "would add" if dry_run and entry["action"] == "added" else entry["action"]
             console.print(f"{entry['article']}: {verb} {entry['link']}", markup=False, highlight=False)
         if dry_run and any(entry["action"] == "added" for entry in changed):
+            console.print("[bold]Pass --no-dry-run to do it.[/bold]")
+
+
+@app.command()
+def tag(
+    slugs: Annotated[list[str], typer.Argument(help="Vault-relative slugs to tag.")],
+    systems: Annotated[list[str] | None, typer.Option("--system", help="Repeatable.")] = None,
+    repos: Annotated[list[str] | None, typer.Option("--repo", help="Repeatable.")] = None,
+    tickets: Annotated[list[str] | None, typer.Option("--ticket", help="Repeatable.")] = None,
+    remove: Annotated[bool, typer.Option("--remove", help="Take the values away instead of adding them.")] = False,
+    dry_run: DryRunOption = True,
+    as_json: JsonOption = False,
+) -> None:
+    """Add or remove systems:, repos: and tickets: values on existing articles.
+
+    These are flow-style YAML arrays on one long line, which is exactly the shape a model
+    edits wrongly by hand — and `repos:` is what decides whether an article can ever be
+    checked against its code, so getting it on later matters.
+    """
+    with run():
+        vault = _vault()
+        wanted = {"systems": systems or [], "repos": repos or [], "tickets": tickets or []}
+        if not any(wanted.values()):
+            raise KbError("give at least one --system, --repo or --ticket")
+        changed: list[dict[str, Any]] = []
+        for slug in slugs:
+            target = _target(vault, slug)
+            if not target.is_file():
+                raise KbError(f"no article at {target}")
+            fields, body = _fields(target)
+            touched: dict[str, list[str]] = {}
+            for name, values in wanted.items():
+                if not values:
+                    continue
+                current = [str(item) for item in (fields.get(name) or [])]
+                lowered = {item.lower() for item in current}
+                if remove:
+                    drop = {value.lower() for value in values}
+                    updated = [item for item in current if item.lower() not in drop]
+                else:
+                    updated = current + [value for value in values if value.lower() not in lowered]
+                if updated != current:
+                    fields[name] = updated or None
+                    if fields[name] is None:
+                        fields.pop(name)
+                    touched[name] = updated
+            if touched:
+                fields["last_updated"] = date.today()
+                if not dry_run:
+                    target.write_text(schema.render_article(fields, body), encoding="utf-8")
+            changed.append({"slug": slug, "changed": touched})
+        if as_json:
+            emit_json({"articles": changed, "dry_run": dry_run, "removed": remove})
+            return
+        verb = "Would " + ("remove from" if remove else "tag") if dry_run else ("Removed from" if remove else "Tagged")
+        for entry in changed:
+            if not entry["changed"]:
+                console.print(f"[dim]no change[/dim] {entry['slug']}")
+                continue
+            detail = "; ".join(f"{name}: {', '.join(values)}" for name, values in entry["changed"].items())
+            console.print(f"{verb} [bold]{entry['slug']}[/bold]  {detail}")
+        if dry_run and any(entry["changed"] for entry in changed):
             console.print("[bold]Pass --no-dry-run to do it.[/bold]")
 
 
@@ -163,6 +246,78 @@ def touch(
             console.print(f"{'Would bump' if dry_run else 'Bumped'} [bold]{entry['slug']}[/bold]  {arrow}")
         if dry_run:
             console.print("[bold]Pass --no-dry-run to do it.[/bold]")
+
+
+def _write_backlinks(vault: Path, target: Path, related: list[str], dry_run: bool) -> list[str]:
+    """Write the reverse of every `--related` into the article it names.
+
+    A link written in one direction only leaves the other article reading as an orphan,
+    and fixing it afterwards means hand-editing a long single-line YAML array. Targets
+    that do not exist are skipped rather than failing — lint reports them as broken links.
+    """
+    written: list[str] = []
+    for entry in related:
+        slug = entry.split("|")[0].strip("[ ").removesuffix(".md")
+        other = vault / f"{slug}.md"
+        if not other.is_file() or other.resolve() == target.resolve():
+            continue
+        if _add_related(other, target, vault, dry_run):
+            written.append(slug)
+    return written
+
+
+def _wikilink(vault: Path, target: Path) -> str:
+    return f"[[{_slug(vault, target)}|{_title(target)}]]"
+
+
+def _already_related(related: list[str], slug: str) -> bool:
+    return any(item.split("|")[0].strip("[ ") == slug for item in related)
+
+
+def _add_related(source: Path, target: Path, vault: Path, dry_run: bool) -> bool:
+    """Add a link from `source` to `target`. Returns False when it was already there."""
+    fields, body = _fields(source)
+    related = list(fields.get("related") or [])
+    if _already_related(related, _slug(vault, target)):
+        return False
+    related.append(_wikilink(vault, target))
+    fields["related"] = related
+    fields["last_updated"] = date.today()
+    if not dry_run:
+        source.write_text(schema.render_article(fields, body), encoding="utf-8")
+    return True
+
+
+def _overlapping(vault: Path, fields: dict[str, Any], skip: str) -> list[tuple[str, str, list[str]]]:
+    """Existing articles sharing any systems:, repos: or tickets: value with the new one.
+
+    Cheap, mechanical, and it answers the question the capture rule actually asks — is
+    something already covering this — at the moment the answer still changes what you do.
+    A search run minutes earlier cannot see what landed since.
+    """
+    wanted = {
+        name: {str(value).lower() for value in (fields.get(name) or [])}
+        for name in ("systems", "repos", "tickets")
+    }
+    if not any(wanted.values()):
+        return []
+    found: list[tuple[str, str, list[str]]] = []
+    articles, _ = schema.load_vault(vault)
+    for article in articles:
+        if article.slug == skip:
+            continue
+        shared = sorted(
+            {
+                value
+                for name, values in wanted.items()
+                for value in article.list_field(name)
+                if value.lower() in values
+            }
+        )
+        if shared:
+            found.append((article.slug, article.title, shared))
+    found.sort(key=lambda row: (-len(row[2]), row[0]))
+    return found
 
 
 def _fields(path: Path) -> tuple[dict[str, Any], str]:

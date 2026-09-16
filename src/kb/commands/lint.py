@@ -153,6 +153,17 @@ def _frontmatter(article: schema.Article, vault: Path) -> list[Finding]:
         value = article.get(name)
         if value is not None and not isinstance(value, list):
             findings.append(Finding("frontmatter-invalid-list", ERROR, where, 1, f"{name}: must be a list"))
+    from_slug = schema.slug_date(article.slug)
+    if from_slug and article.date_field("created") not in (None, from_slug):
+        findings.append(
+            Finding(
+                "slug-date-mismatch",
+                WARN,
+                where,
+                1,
+                f"the slug says {from_slug} but created: is {article.date_field('created')}",
+            )
+        )
     created, updated = article.date_field("created"), article.date_field("last_updated")
     for name, parsed in (("created", created), ("last_updated", updated)):
         if article.get(name) is not None and parsed is None:
@@ -270,8 +281,13 @@ def _placement(article: schema.Article, vault: Path) -> list[Finding]:
 
 
 def _staleness(article: schema.Article, vault: Path, stale_months: int, today: date) -> list[Finding]:
-    """An `active` article is expected to change constantly, so age says nothing about it."""
-    if article.is_active:
+    """Age only means something for an article that is meant to still be true.
+
+    An `active` one is expected to change every session; a `superseded` one is expected
+    never to change again. Flagging either as stale is noise that trains people to ignore
+    the rule.
+    """
+    if article.is_timeless:
         return []
     updated = article.date_field("last_updated")
     if updated is None:

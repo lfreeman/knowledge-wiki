@@ -165,15 +165,16 @@ def _section(articles: list[schema.Article]) -> str:
 
 def _row(article: schema.Article) -> str:
     link = f"[[{article.slug}\\|{_cell(article.title or article.slug)}]]"
-    status = "**active**" if article.is_active else _cell(article.status)
+    if article.is_active:
+        status = "**active**"
+    elif article.is_superseded:
+        status = "*superseded*"
+    else:
+        status = _cell(article.status)
     systems = _cell(", ".join(article.list_field("systems")))
     return f"| {link} | {status} | {systems} | {_cell(article.summary)} |"
 
 
 def _cell(text: str) -> str:
-    """Make free text safe inside a table cell.
-
-    A raw `|` would start a new column, and a newline would end the row. Rows stay
-    minimal and unpadded so an editor that reflows tables has nothing to reflow.
-    """
-    return " ".join(text.split()).replace("|", "\\|")
+    """Make free text safe inside a table cell. See `schema.table_cell`."""
+    return schema.table_cell(text)

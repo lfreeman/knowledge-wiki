@@ -216,3 +216,156 @@ def test_link_is_a_preview_by_default(article: ArticleWriter, vault: Path) -> No
 def test_link_fails_when_either_article_is_missing(article: ArticleWriter, vault: Path) -> None:
     article("systems/a")
     assert runner.invoke(app, ["article", "link", "systems/a", "runbooks/nope", "--no-dry-run"]).exit_code == 1
+
+
+def test_a_dated_slug_sets_created_without_any_flag(vault: Path) -> None:
+    # Incidents are named YYYY-MM-DD-slug, which by definition means backdating. Nobody
+    # should have to discover a flag to get the date right on exactly those articles.
+    runner.invoke(
+        app,
+        ["article", "new", "incidents/2026-06-25-a-thing", "--title", "T", "--summary", "S", "--no-dry-run"],
+    )
+    parsed = schema.parse_article(vault / "incidents" / "2026-06-25-a-thing.md", vault)
+    assert parsed.date_field("created") == date(2026, 6, 25)
+    assert parsed.date_field("last_updated") == date.today()
+
+
+def test_an_explicit_created_wins_over_the_slug_but_warns(vault: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "article", "new", "incidents/2026-06-25-a-thing", "--title", "T", "--summary", "S",
+            "--created", "2026-07-01", "--no-dry-run",
+        ],
+    )
+    assert "warning" in result.output.lower()
+    parsed = schema.parse_article(vault / "incidents" / "2026-06-25-a-thing.md", vault)
+    assert parsed.date_field("created") == date(2026, 7, 1)
+
+
+def test_an_agreeing_created_does_not_warn(vault: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "article", "new", "incidents/2026-06-25-a-thing", "--title", "T", "--summary", "S",
+            "--created", "2026-06-25", "--no-dry-run",
+        ],
+    )
+    assert "warning" not in result.output.lower()
+
+
+def test_an_undated_slug_still_defaults_to_today(vault: Path) -> None:
+    runner.invoke(app, [*BASE, "--no-dry-run"])
+    assert schema.parse_article(vault / "runbooks" / "a-slug.md", vault).date_field("created") == date.today()
+
+
+# --- the write-time overlap check, backlinks, and tagging ---
+
+
+def test_new_warns_about_articles_sharing_a_system(article: ArticleWriter, vault: Path) -> None:
+    # A search run minutes earlier cannot see what landed since; this can.
+    article("systems/existing", title="Existing", systems=["Athena", "geohash"])
+    result = runner.invoke(
+        app,
+        ["article", "new", "research/fresh", "--title", "T", "--summary", "S", "--system", "Athena", "--no-dry-run"],
+    )
+    assert result.exit_code == 0
+    assert "systems/existing" in result.output
+    assert "Athena" in result.output
+
+
+def test_new_reports_overlap_on_repos_and_tickets_too(article: ArticleWriter, vault: Path) -> None:
+    article("systems/existing", title="Existing", repos=["some-service"], tickets=["PROJ-1"])
+    payload = json.loads(
+        runner.invoke(
+            app,
+            ["article", "new", "research/fresh", "--title", "T", "--summary", "S",
+             "--repo", "some-service", "--ticket", "PROJ-1", "--json"],
+        ).output
+    )
+    (overlap,) = payload["overlaps"]
+    assert overlap["slug"] == "systems/existing"
+    assert set(overlap["shared"]) == {"some-service", "PROJ-1"}
+
+
+def test_new_says_nothing_when_there_is_no_overlap(article: ArticleWriter, vault: Path) -> None:
+    article("systems/existing", title="Existing", systems=["Athena"])
+    payload = json.loads(
+        runner.invoke(
+            app,
+            ["article", "new", "research/fresh", "--title", "T", "--summary", "S", "--system", "Kafka", "--json"],
+        ).output
+    )
+    assert payload["overlaps"] == []
+
+
+def test_new_writes_the_reverse_of_every_related_link(article: ArticleWriter, vault: Path) -> None:
+    article("systems/other", title="Other Article")
+    runner.invoke(
+        app,
+        ["article", "new", "research/fresh", "--title", "Fresh", "--summary", "S",
+         "--related", "[[systems/other|Other Article]]", "--no-dry-run"],
+    )
+    assert schema.parse_article(vault / "systems" / "other.md", vault).list_field("related") == [
+        "[[research/fresh|Fresh]]"
+    ]
+
+
+def test_new_skips_a_related_target_that_does_not_exist(vault: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["article", "new", "research/fresh", "--title", "Fresh", "--summary", "S",
+         "--related", "[[systems/nope|Nope]]", "--no-dry-run"],
+    )
+    assert result.exit_code == 0
+    assert schema.parse_article(vault / "research" / "fresh.md", vault).list_field("related") == [
+        "[[systems/nope|Nope]]"
+    ]
+
+
+def test_link_after_related_is_safe(article: ArticleWriter, vault: Path) -> None:
+    # Running link afterwards must not double the entry.
+    article("systems/other", title="Other Article")
+    runner.invoke(
+        app,
+        ["article", "new", "research/fresh", "--title", "Fresh", "--summary", "S",
+         "--related", "[[systems/other|Other Article]]", "--no-dry-run"],
+    )
+    runner.invoke(app, ["article", "link", "research/fresh", "systems/other", "--no-dry-run"])
+    assert len(schema.parse_article(vault / "systems" / "other.md", vault).list_field("related")) == 1
+
+
+def test_tag_adds_values_to_an_existing_article(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", systems=["Athena"])
+    runner.invoke(app, ["article", "tag", "systems/a", "--system", "geohash", "--repo", "some-service",
+                        "--no-dry-run"])
+    parsed = schema.parse_article(vault / "systems" / "a.md", vault)
+    assert parsed.list_field("systems") == ["Athena", "geohash"]
+    assert parsed.list_field("repos") == ["some-service"]
+
+
+def test_tag_does_not_duplicate_a_value(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", systems=["Athena"])
+    runner.invoke(app, ["article", "tag", "systems/a", "--system", "athena", "--no-dry-run"])
+    assert schema.parse_article(vault / "systems" / "a.md", vault).list_field("systems") == ["Athena"]
+
+
+def test_tag_can_remove(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", systems=["Athena", "geohash"])
+    runner.invoke(app, ["article", "tag", "systems/a", "--system", "geohash", "--remove", "--no-dry-run"])
+    assert schema.parse_article(vault / "systems" / "a.md", vault).list_field("systems") == ["Athena"]
+
+
+def test_tag_takes_several_articles_and_bumps_their_dates(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a", last_updated="2020-01-01")
+    article("systems/b", last_updated="2020-01-01")
+    runner.invoke(app, ["article", "tag", "systems/a", "systems/b", "--repo", "some-service", "--no-dry-run"])
+    for slug in ("a", "b"):
+        parsed = schema.parse_article(vault / "systems" / f"{slug}.md", vault)
+        assert parsed.list_field("repos") == ["some-service"]
+        assert parsed.date_field("last_updated") == date.today()
+
+
+def test_tag_needs_at_least_one_value(article: ArticleWriter, vault: Path) -> None:
+    article("systems/a")
+    assert runner.invoke(app, ["article", "tag", "systems/a", "--no-dry-run"]).exit_code == 1

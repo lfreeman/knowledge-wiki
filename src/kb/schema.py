@@ -35,7 +35,14 @@ TYPES: frozenset[str] = frozenset(
     {"system", "incident", "runbook", "guide", "learning", "reference", "research", "journal", "ticket", "concept"}
 )
 
-STATUSES: frozenset[str] = frozenset({"stable", "active"})
+#: `stable` is the default. `active` mutates every session and is current position, not
+#: fact. `superseded` no longer describes how things are — replaced, reversed, or a plan
+#: whose work has landed — and is kept as history, ranked below current material.
+STATUSES: frozenset[str] = frozenset({"stable", "active", "superseded"})
+
+#: Statuses whose age says nothing, so the staleness rule skips them. An `active` article
+#: is expected to change constantly; a `superseded` one is expected never to change again.
+TIMELESS_STATUSES: frozenset[str] = frozenset({"active", "superseded"})
 
 #: The natural home for each type. `ticket` and `concept` have none — they are filed
 #: under the directory of whatever they describe.
@@ -120,6 +127,15 @@ class Article:
     def summary(self) -> str:
         value = self.get("summary")
         return value if isinstance(value, str) else ""
+
+    @property
+    def is_superseded(self) -> bool:
+        return self.status == "superseded"
+
+    @property
+    def is_timeless(self) -> bool:
+        """Whether the article's age says anything about whether it is still true."""
+        return self.status in TIMELESS_STATUSES
 
     @property
     def is_active(self) -> bool:
@@ -300,6 +316,40 @@ FIELD_ORDER: tuple[str, ...] = (
 
 #: A scalar starting with one of these opens a YAML construct and has to be quoted.
 _YAML_INDICATORS = "-?:,[]{}#&*!|>'\"%@`"
+
+
+#: The article that holds the learning-gaps inbox. Live state, so `status: active`.
+GAPS_SLUG = "learning/learning-gaps"
+
+
+def table_cell(text: str) -> str:
+    """Make free text safe inside a markdown table cell.
+
+    A raw `|` starts a new column and a newline ends the row, so both destroy the table.
+    The result is minimal and unpadded, leaving nothing for an editor to reflow.
+    """
+    return " ".join(str(text).split()).replace("|", "\\|")
+
+
+#: An incident or dated-report slug: `YYYY-MM-DD-something`.
+_SLUG_DATE = re.compile(r"(?:^|/)(?P<date>\d{4}-\d{2}-\d{2})-")
+
+
+def slug_date(slug: str) -> date | None:
+    """The date a slug carries in its filename, if it carries one.
+
+    Incidents and dated reports are named `YYYY-MM-DD-short-slug`, which by definition
+    means backdating — the article is written after the day it is about. That date is a
+    better default for `created:` than today, and it means nobody has to discover a flag
+    in order to get it right.
+    """
+    found = _SLUG_DATE.search(slug)
+    if not found:
+        return None
+    try:
+        return date.fromisoformat(found.group("date"))
+    except ValueError:
+        return None
 
 
 def slugify(text: str) -> str:

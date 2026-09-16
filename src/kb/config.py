@@ -32,9 +32,15 @@ DEFAULT_REPO_ROOT = Path.home() / "workspace"
 CONFIG_FILE_NAME = "config.json"
 SCHEMA_FILE_NAME = "SCHEMA.md"
 
-#: Where Claude Code scans for skills, and the name kb installs under.
+#: Where Claude Code scans for skills.
 CLAUDE_SKILLS_DIR = Path.home() / ".claude" / "skills"
-SKILL_NAME = "capture"
+
+#: Every skill this package ships. They live in the repo and are symlinked out, so each
+#: versions with the CLI it calls rather than drifting as a separate copy.
+SKILL_NAMES: tuple[str, ...] = ("capture", "gap", "gaps-review")
+
+#: Kept for callers that mean "the main one".
+SKILL_NAME = SKILL_NAMES[0]
 
 
 def schema_path() -> Path:
@@ -42,14 +48,14 @@ def schema_path() -> Path:
     return Path(str(files("kb") / SCHEMA_FILE_NAME))
 
 
-def skill_link() -> Path:
-    """The symlink Claude Code discovers, at ~/.claude/skills/capture."""
-    return CLAUDE_SKILLS_DIR / SKILL_NAME
+def skill_link(name: str = SKILL_NAME) -> Path:
+    """The symlink Claude Code discovers, at ~/.claude/skills/<name>."""
+    return CLAUDE_SKILLS_DIR / name
 
 
-def skill_source() -> Path:
+def skill_source(name: str = SKILL_NAME) -> Path:
     """The repo directory the link points at. Present for an editable install."""
-    return Path(__file__).resolve().parents[2] / "skills" / SKILL_NAME
+    return Path(__file__).resolve().parents[2] / "skills" / name
 
 
 def config_dir() -> Path:

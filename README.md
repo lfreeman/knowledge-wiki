@@ -55,14 +55,21 @@ kb lint                     # broken links, dead pointers, missing fields, orpha
 kb schema                   # print the rules the vault follows
 kb doctor                   # check the config, the vault, and the skill link still resolve
 
+kb search <terms>                      # which articles already cover this — run before writing
 kb article new <dir>/<slug> --title … --summary … --body-file …
 kb article touch <dir>/<slug>          # bump last_updated after editing by hand
+kb article link <a> <b>                # relate two articles, writing both halves
+
+kb gap add "<concept>" --area <area>   # log something you did not know
+kb gap list [--area X] [--state open]  # the inbox, with a count per area
+kb gap promote <id>… --to learning/<topic>
+kb gap close <id>… --note "<what answered it>"
 
 kb adopt inspect <path>                # evidence for classifying a document; decides nothing
 kb adopt point   <path> --summary …    # a stub at a document that rightfully stays put
 kb adopt move    <path> --to runbooks  # bring a homeless document in, absolutising its links
 
-kb skill install                       # symlink the capture skill into ~/.claude/skills
+kb skill install                       # symlink the skills into ~/.claude/skills
 ```
 
 Every read command takes `--json`, because the main caller is an agent rather than a

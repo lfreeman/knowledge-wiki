@@ -5,7 +5,7 @@ from typing import Annotated
 import typer
 
 from . import __version__, config
-from .commands import adopt, article, doctor, schema_cmd, skill
+from .commands import adopt, article, doctor, gap, schema_cmd, skill
 from .commands import index as index_cmd
 from .commands import init as init_cmd
 from .commands import lint as lint_cmd
@@ -30,6 +30,7 @@ app.command("lint", rich_help_panel="Common")(lint_cmd.lint)
 app.command("search", rich_help_panel="Common")(search_cmd.search)
 app.command("schema", rich_help_panel="Common")(schema_cmd.schema)
 app.add_typer(article.app, name="article", rich_help_panel="Common")
+app.add_typer(gap.app, name="gap", rich_help_panel="Common")
 app.add_typer(adopt.app, name="adopt", rich_help_panel="Common")
 app.add_typer(skill.app, name="skill", rich_help_panel="Setup")
 app.command("init", rich_help_panel="Setup")(init_cmd.init)
