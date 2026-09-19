@@ -80,7 +80,7 @@ def new(
         if not dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
-        backlinks = _write_backlinks(vault, target, related or [], dry_run)
+        backlinks = write_backlinks(vault, target, related or [], dry_run, title)
         if as_json:
             emit_json(
                 {
@@ -242,18 +242,26 @@ def touch(
             emit_json({"changed": changed, "dry_run": dry_run})
             return
         for entry in changed:
+            if entry["from"] == entry["to"]:
+                console.print(f"[dim]{entry['slug']}  already current ({entry['to']})[/dim]")
+                continue
             arrow = f"{entry['from'] or '(none)'} -> {entry['to']}"
             console.print(f"{'Would bump' if dry_run else 'Bumped'} [bold]{entry['slug']}[/bold]  {arrow}")
         if dry_run:
             console.print("[bold]Pass --no-dry-run to do it.[/bold]")
 
 
-def _write_backlinks(vault: Path, target: Path, related: list[str], dry_run: bool) -> list[str]:
+def write_backlinks(vault: Path, target: Path, related: list[str], dry_run: bool, title: str) -> list[str]:
     """Write the reverse of every `--related` into the article it names.
 
     A link written in one direction only leaves the other article reading as an orphan,
-    and fixing it afterwards means hand-editing a long single-line YAML array. Targets
-    that do not exist are skipped rather than failing — lint reports them as broken links.
+    and fixing it afterwards means hand-editing a long single-line YAML array. Related
+    articles that do not exist are skipped rather than failing — lint reports them as
+    broken links. `title` is the new article's own, passed in rather than read back off
+    disk because a preview has deliberately not written it there.
+
+    Public because `kb adopt` brings articles in the same way and owes the same reverse
+    link; a document adopted with `--related` used to be linked in one direction only.
     """
     written: list[str] = []
     for entry in related:
@@ -261,26 +269,30 @@ def _write_backlinks(vault: Path, target: Path, related: list[str], dry_run: boo
         other = vault / f"{slug}.md"
         if not other.is_file() or other.resolve() == target.resolve():
             continue
-        if _add_related(other, target, vault, dry_run):
+        if _add_related(other, target, vault, dry_run, title):
             written.append(slug)
     return written
 
 
-def _wikilink(vault: Path, target: Path) -> str:
-    return f"[[{_slug(vault, target)}|{_title(target)}]]"
+def _wikilink(vault: Path, target: Path, title: str | None = None) -> str:
+    """A link to `target` aliased by its title. Pass `title` when `target` is not on disk yet."""
+    return f"[[{_slug(vault, target)}|{title or _title(target)}]]"
 
 
 def _already_related(related: list[str], slug: str) -> bool:
     return any(item.split("|")[0].strip("[ ") == slug for item in related)
 
 
-def _add_related(source: Path, target: Path, vault: Path, dry_run: bool) -> bool:
-    """Add a link from `source` to `target`. Returns False when it was already there."""
+def _add_related(source: Path, target: Path, vault: Path, dry_run: bool, title: str | None = None) -> bool:
+    """Add a link from `source` to `target`. Returns False when it was already there.
+
+    `title` aliases the new link when `target` has not been written yet.
+    """
     fields, body = _fields(source)
     related = list(fields.get("related") or [])
     if _already_related(related, _slug(vault, target)):
         return False
-    related.append(_wikilink(vault, target))
+    related.append(_wikilink(vault, target, title))
     fields["related"] = related
     fields["last_updated"] = date.today()
     if not dry_run:

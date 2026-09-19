@@ -73,10 +73,14 @@ class Match:
     terms_missing: list[str] = field(default_factory=list)
     line: int | None = None
     excerpt: str | None = None
+    inbox_mention: bool = False
 
 
 def search(
-    terms: Annotated[list[str], typer.Argument(help="Words to look for. Partial matches rank below full ones.")],
+    terms: Annotated[
+        list[str],
+        typer.Argument(help="Words to look for; a quoted phrase counts as its words. Partial matches rank lower."),
+    ],
     limit: Annotated[int, typer.Option("--limit", help="How many articles to report.")] = DEFAULT_LIMIT,
     as_json: JsonOption = False,
 ) -> None:
@@ -129,15 +133,19 @@ def find(vault: Path, terms: list[str]) -> list[Match]:
     Deliberately not a strict AND. A four-word query that no article satisfies used to
     return nothing while an article matching three of the four sat there unmentioned —
     and you cannot tell the difference between "nothing covers this" and "one word was
-    wrong". Articles are ranked by how many distinct terms they matched, then by where
-    those terms appeared; ties break on slug so the order is stable between runs.
+    wrong". Every term is split on whitespace for the same reason: a quoted phrase used
+    to match only where its words sat adjacent, so describing an article the vault
+    already had returned zero, which reads exactly like nothing covering the subject.
+    Articles are ranked by how many distinct terms they matched, then by where those
+    terms appeared; ties break on slug so the order is stable between runs. The one
+    exception is the gaps inbox matched only in its body — see `inbox_mention`.
     """
-    wanted = [term.lower() for term in terms if term.strip()]
+    wanted = list(dict.fromkeys(word for term in terms for word in term.lower().split()))
     if not wanted:
         return []
     articles, _ = schema.load_vault(vault)
     matches = [found for article in articles if (found := _score(article, wanted))]
-    matches.sort(key=lambda match: (-len(match.terms_found), -match.score, match.slug))
+    matches.sort(key=lambda match: (-len(match.terms_found), match.inbox_mention, -match.score, match.slug))
     return matches
 
 
@@ -187,6 +195,11 @@ def _score(article: schema.Article, wanted: list[str]) -> Match | None:
     if article.is_superseded:
         score = max(1, round(score * SUPERSEDED_PENALTY))
 
+    # The inbox accumulates every subject a gap was ever logged against, so it matches
+    # almost any query while being about none of them. It is still returned — a logged
+    # gap is worth knowing about — but never above an article on the subject.
+    inbox_mention = article.slug == schema.GAPS_SLUG and matched == ["body"]
+
     line, excerpt = _first_body_hit(article, found)
     return Match(
         slug=article.slug,
@@ -200,6 +213,7 @@ def _score(article: schema.Article, wanted: list[str]) -> Match | None:
         terms_missing=missing,
         line=line,
         excerpt=excerpt,
+        inbox_mention=inbox_mention,
     )
 
 

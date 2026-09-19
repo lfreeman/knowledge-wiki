@@ -10,6 +10,7 @@ from pathlib import Path
 from conftest import ArticleWriter
 from typer.testing import CliRunner
 
+from kb import schema
 from kb.cli import app
 from kb.commands.search import find
 
@@ -210,3 +211,38 @@ def test_a_superseded_article_ranks_below_a_current_one(article: ArticleWriter, 
 def test_a_superseded_article_is_still_found(article: ArticleWriter, vault: Path) -> None:
     article("research/old-plan", title="Widget Plan", status="superseded")
     assert [match.slug for match in find(vault, ["widget"])] == ["research/old-plan"]
+
+
+def test_a_quoted_phrase_is_searched_as_its_words(article: ArticleWriter, vault: Path) -> None:
+    # Quoting a description used to match only where those words sat adjacent, so a
+    # phrase describing an article the vault already had returned nothing — and zero
+    # results read exactly like "nothing covers this".
+    article("guides/benchmark", title="Proximity Benchmark", body="Measured under heavy load.\n")
+    matches = find(vault, ["proximity load"])
+    assert [match.slug for match in matches] == ["guides/benchmark"]
+    assert matches[0].terms_found == ["proximity", "load"]
+
+
+def test_a_word_repeated_across_terms_counts_once(article: ArticleWriter, vault: Path) -> None:
+    article("guides/benchmark", title="Proximity Benchmark")
+    (match,) = find(vault, ["proximity benchmark", "benchmark"])
+    assert match.terms_found == ["proximity", "benchmark"]
+
+
+def test_the_gaps_inbox_ranks_below_an_article_about_the_subject(article: ArticleWriter, vault: Path) -> None:
+    # The inbox accumulates every subject a gap was ever logged against, so it matches
+    # almost any query while being about none of them — and it is noise in the one
+    # command whose output drives update-vs-create.
+    article(schema.GAPS_SLUG, title="Learning Gaps", status="active",
+            body="- g-0001 geohash\n- g-0002 geohash again\n- g-0003 more geohash\n")
+    article("runbooks/mentions-it", title="Restarting Something", body="Check geohash afterwards.\n")
+    matches = find(vault, ["geohash"])
+    assert [match.slug for match in matches] == ["runbooks/mentions-it", schema.GAPS_SLUG]
+    assert matches[1].inbox_mention is True
+
+
+def test_the_gaps_inbox_is_still_found_when_you_search_for_it(article: ArticleWriter, vault: Path) -> None:
+    # De-ranked on a body-only match, not excluded: searching for the inbox finds it.
+    article(schema.GAPS_SLUG, title="Learning Gaps", status="active", body="- g-0001 something\n")
+    article("guides/other", title="Unrelated Guide", body="A note about gaps in coverage.\n")
+    assert find(vault, ["learning gaps"])[0].slug == schema.GAPS_SLUG

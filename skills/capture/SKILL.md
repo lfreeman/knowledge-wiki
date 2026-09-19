@@ -81,6 +81,11 @@ the summaries of everything that comes back.
 
    Close a gap only when the article genuinely answers it — closing is a claim the user now
    knows it. Say which ids you closed in your end-of-turn note.
+
+   **The answer does not have to be in the vault.** A gap can be genuinely answered by a
+   published document, a card deck, or a conversation the user worked through. Close it, and
+   put the real location in `--note` — a URL or a deck name instead of a wikilink. What
+   matters is that a future reader can find what answered it.
 8. **Fix what lint reports** before finishing. A finding you leave behind is one the user
    inherits.
 
@@ -98,7 +103,13 @@ the vault root when clicked. It looks right in the raw markdown, which is why it
 - Add the link in **both** directions: the new article's `related:` and the existing one's.
   `kb article link A B` writes both halves for you — use it rather than editing two files.
 
-`kb lint` checks all three. Run it.
+- **Create the article you are linking to first.** A link written before its destination
+  exists points at a slug you have not committed to yet, and `kb adopt move --to` decides the
+  destination directory — and therefore the slug — at the moment you run it. Change your mind
+  about the directory and every link written earlier is now wrong, in files already on disk.
+
+`kb lint` checks all four, reporting the last as `link-broken`. Run it — and never skip it
+after an adoption, which is the step most likely to have moved a slug out from under a link.
 
 ---
 
@@ -161,10 +172,18 @@ line before believing it.
 | **Finished, rightfully located** | Names its own repo in prose; the repo lists it; the repo tracks it | `kb adopt point` — a stub, nothing moves |
 | **Finished, homeless** | Never names its own repo; not listed; often **not tracked by git** | `kb adopt move` |
 | **Active state** | A workflow reads *and writes* it every run | `kb adopt move --status active --to learning` |
+| **Claimed but uncommitted** | `signals_conflict: true` — names its own repo, or the repo lists it, *and* git does not track it | Not decidable from the evidence. Ask |
 
 **`tracked_by_git: false` is the strongest single signal.** A repository that does not track
 a document is not claiming it, and that document has no history and no backup — moving it
 into the vault is a rescue, not a reorganisation. Say so when you report it.
+
+**Except when the repo's own text claims it anyway.** A document written into a service's
+`docs/` and never committed reads as rightfully located *and* as homeless at once, and it is
+a common state — a whole directory of drafts can be untracked. `kb adopt inspect` reports
+that combination as `signals_conflict: true`. Do not resolve it from the evidence, because
+the evidence does not contain the answer: what settles it is whether the repo is *meant* to
+own the document, which only the user knows. Ask, and say which way each signal points.
 
 `names_own_repo` counts prose only; a repo name inside a code block or backticks is a
 dependency coordinate, not the document claiming ownership.
@@ -277,6 +296,32 @@ takes `--json`.
 
 `kb index` is the one write with no `--dry-run`: it regenerates derived data, so a
 preview-first default would be friction on the most-run command.
+
+### What `--json` returns
+
+Top-level keys, so you never have to probe the shape. Every write also carries `dry_run`.
+
+| Command | Top-level keys |
+|---|---|
+| `kb article new` | `slug` `target` `article` `overlaps[]` `backlinks[]` `dry_run` |
+| `kb article link` | `changed[]` `dry_run` |
+| `kb article tag` | `articles[]` `removed` `dry_run` |
+| `kb article touch` | `changed[]` `dry_run` |
+| `kb adopt inspect` | a flat object — `path` `lines` `heading` `repo` `repo_name` `names_own_repo` `listed_in_repo_docs[]` `outbound_relative[]` `outbound_broken[]` `inbound[]` `searched[]` `ambiguous_name` `tracked_by_git` `signals_conflict` |
+| `kb adopt move` | `moves[]` `dry_run` — each move has `action` `source` `target` `source_action` `links_absolutised[]` `backlinks[]` `article` |
+| `kb adopt point` | one move object, flat, plus `dry_run` |
+| `kb gap add` | `gap` `dry_run` |
+| `kb gap list` | `gaps[]` `count` `by_area` |
+| `kb gap promote` | `promoted[]` `to` `dry_run` |
+| `kb gap close` | `closed[]` `dry_run` |
+| `kb search` | `matches[]` `count` `total` `terms[]` `by_terms_found` |
+| `kb index` | `articles` `directories` `backlinks` `index` `backlinks_file` `unreadable[]` `dry_run` |
+| `kb lint` | `findings[]` `errors` `warnings` |
+
+Every gap — in `gaps[]`, `promoted[]`, `closed[]` and `gap` — is
+`{id, date, area, text, note, state}`. Every search match carries `slug` `title` `type`
+`status` `summary` `score` `matched[]` `terms_found[]` `terms_missing[]` `line` `excerpt`
+`inbox_mention`.
 
 Two traps in that table. **`--source` means different things**: on `article new` it is a
 repeatable raw-entry id, and on `adopt move` it is one of `remove`, `symlink` or `keep`,

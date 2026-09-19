@@ -335,6 +335,30 @@ def test_link_after_related_is_safe(article: ArticleWriter, vault: Path) -> None
     assert len(schema.parse_article(vault / "systems" / "other.md", vault).list_field("related")) == 1
 
 
+def test_new_previews_a_related_link_without_reading_the_article_it_has_not_written(
+    article: ArticleWriter, vault: Path
+) -> None:
+    # The skill's flow is preview, then write. Taking the alias off disk made the preview
+    # read a file the preview had deliberately not created.
+    article("systems/other", title="Other Article")
+    result = runner.invoke(
+        app,
+        ["article", "new", "research/fresh", "--title", "Fresh", "--summary", "S",
+         "--related", "[[systems/other|Other Article]]"],
+    )
+    assert result.exit_code == 0
+    assert not (vault / "research" / "fresh.md").exists()
+    assert "systems/other" in result.output
+    assert schema.parse_article(vault / "systems" / "other.md", vault).list_field("related") == []
+
+
+def test_touch_says_so_when_the_date_is_already_current(article: ArticleWriter) -> None:
+    article("systems/a", last_updated=date.today().isoformat())
+    result = runner.invoke(app, ["article", "touch", "systems/a", "--no-dry-run"])
+    assert "already current" in result.output
+    assert "->" not in result.output
+
+
 def test_tag_adds_values_to_an_existing_article(article: ArticleWriter, vault: Path) -> None:
     article("systems/a", systems=["Athena"])
     runner.invoke(app, ["article", "tag", "systems/a", "--system", "geohash", "--repo", "some-service",

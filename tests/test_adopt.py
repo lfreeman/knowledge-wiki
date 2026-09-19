@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from conftest import ArticleWriter
 from typer.testing import CliRunner
 
 from kb import schema
@@ -487,6 +488,84 @@ def test_tracked_by_git_is_unknown_outside_a_repository(tmp_path: Path) -> None:
     doc = tmp_path / "loose.md"
     doc.write_text("# Loose\n", encoding="utf-8")
     assert examine(doc).tracked_by_git is None
+
+
+def test_inspect_names_the_conflict_when_a_repo_does_not_track_what_it_claims(repo: Path) -> None:
+    # The combination the decision table has no row for: the prose says the document is
+    # about this repo, and the repo has never committed it. Evidence cannot settle it —
+    # whether the repo intends to own the document is only knowable by asking.
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n\nThis describes some-service's request path.\n", encoding="utf-8")
+    result = examine(doc)
+    assert result.names_own_repo is True
+    assert result.tracked_by_git is False
+    assert result.signals_conflict is True
+
+
+def test_inspect_reports_no_conflict_when_the_repo_tracks_what_it_claims(repo: Path) -> None:
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n\nThis describes some-service's request path.\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/design.md"], cwd=repo, check=True)
+    assert examine(doc).signals_conflict is False
+
+
+def test_inspect_reports_no_conflict_for_a_document_no_repo_claims(repo: Path) -> None:
+    # Untracked and never naming its repo is the unambiguous homeless case, not a conflict.
+    doc = repo / "docs" / "jvm-runbook.md"
+    doc.write_text("# JVM Runbook\n\nApplies to any JVM workload.\n", encoding="utf-8")
+    result = examine(doc)
+    assert result.tracked_by_git is False
+    assert result.signals_conflict is False
+
+
+def test_inspect_says_the_conflict_is_not_decidable_from_evidence(repo: Path) -> None:
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n\nThis describes some-service's request path.\n", encoding="utf-8")
+    result = runner.invoke(app, ["adopt", "inspect", str(doc)])
+    assert "not decidable from the evidence" in result.output
+
+
+def test_move_writes_the_reverse_of_every_related_link(article: ArticleWriter, repo: Path, vault: Path) -> None:
+    # Same bookkeeping `article new --related` does. A one-way link leaves the other
+    # article reading as an orphan even though something points at it.
+    article("systems/other", title="Other Article")
+    doc = repo / "docs" / "jvm-runbook.md"
+    doc.write_text("# JVM Runbook\n\nSteps.\n", encoding="utf-8")
+    runner.invoke(
+        app,
+        ["adopt", "move", str(doc), "--to", "runbooks", "--summary", "S",
+         "--related", "[[systems/other|Other Article]]", "--no-dry-run"],
+    )
+    assert schema.parse_article(vault / "systems" / "other.md", vault).list_field("related") == [
+        "[[runbooks/jvm-runbook|JVM Runbook]]"
+    ]
+
+
+def test_point_writes_the_reverse_of_every_related_link(article: ArticleWriter, repo: Path, vault: Path) -> None:
+    article("systems/other", title="Other Article")
+    doc = repo / "docs" / "design.md"
+    doc.write_text("# Design\n\nHow it works.\n", encoding="utf-8")
+    runner.invoke(
+        app,
+        ["adopt", "point", str(doc), "--summary", "S",
+         "--related", "[[systems/other|Other Article]]", "--no-dry-run"],
+    )
+    assert schema.parse_article(vault / "systems" / "other.md", vault).list_field("related") == [
+        "[[reference/design|Design]]"
+    ]
+
+
+def test_move_previews_a_related_link_without_writing_it(article: ArticleWriter, repo: Path, vault: Path) -> None:
+    article("systems/other", title="Other Article")
+    doc = repo / "docs" / "jvm-runbook.md"
+    doc.write_text("# JVM Runbook\n\nSteps.\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["adopt", "move", str(doc), "--to", "runbooks", "--summary", "S",
+         "--related", "[[systems/other|Other Article]]"],
+    )
+    assert result.exit_code == 0
+    assert schema.parse_article(vault / "systems" / "other.md", vault).list_field("related") == []
 
 
 def test_inspect_reports_a_relative_reference_that_is_already_broken(repo: Path) -> None:

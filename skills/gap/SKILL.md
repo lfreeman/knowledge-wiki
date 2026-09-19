@@ -108,6 +108,11 @@ logged a third time.
 kb gap close g-0042 --note "[[guides/s3-streaming|AWS S3 Streaming]] §6.1" --no-dry-run
 ```
 
+**The answer does not have to be in the vault.** A published document, a card deck, or a
+conversation the user worked through can genuinely close a gap. Put the real location in
+`--note` — a URL or a deck name instead of a wikilink — so a future reader can still find
+what answered it.
+
 ---
 
 ## Command reference

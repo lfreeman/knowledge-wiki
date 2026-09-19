@@ -30,6 +30,7 @@ import typer
 from .. import config, schema
 from ..errors import ArticleError, KbError, VaultNotFoundError, run
 from ..output import DryRunOption, JsonOption, console, emit_json
+from .article import write_backlinks
 
 app = typer.Typer(help="Bring an existing document into the vault, or point at it where it is.")
 
@@ -83,6 +84,7 @@ class Inspection:
     searched: list[str]
     ambiguous_name: bool
     tracked_by_git: bool | None
+    signals_conflict: bool
 
 
 @app.command()
@@ -116,6 +118,9 @@ def examine(path: Path, extra_roots: list[Path] | None = None) -> Inspection:
     roots = _dedupe([root for root in [repo, config.load_config().repo_root, *(extra_roots or [])] if root])
     inbound = _inbound(path, roots)
     resolves, broken = _outbound(path, text)
+    names_own_repo = repo_name is not None and repo_name in _prose(text)
+    listed = _listed_in_repo_docs(path, repo)
+    tracked = _tracked_by_git(path, repo)
     return Inspection(
         path=str(path),
         exists=True,
@@ -124,15 +129,28 @@ def examine(path: Path, extra_roots: list[Path] | None = None) -> Inspection:
         has_frontmatter=text.startswith("---"),
         repo=str(repo) if repo else None,
         repo_name=repo_name,
-        names_own_repo=repo_name is not None and repo_name in _prose(text),
-        listed_in_repo_docs=_listed_in_repo_docs(path, repo),
+        names_own_repo=names_own_repo,
+        listed_in_repo_docs=listed,
         outbound_relative=resolves,
         outbound_broken=broken,
         inbound=inbound,
         searched=[str(root) for root in roots],
         ambiguous_name=_is_common_name(path, roots),
-        tracked_by_git=_tracked_by_git(path, repo),
+        tracked_by_git=tracked,
+        signals_conflict=_signals_conflict(names_own_repo=names_own_repo, listed=listed, tracked=tracked),
     )
+
+
+def _signals_conflict(*, names_own_repo: bool, listed: list[str], tracked: bool | None) -> bool:
+    """Whether the evidence about where a document belongs points both ways.
+
+    A document that claims a repo the repo has never committed satisfies both the
+    "rightfully located" and the "homeless" reading at once. Reporting the disagreement
+    is still evidence — it names a fact about the file — and stops short of deciding,
+    because what settles it is whether the repo *intends* to own the document, and only
+    a person knows that.
+    """
+    return (names_own_repo or bool(listed)) and tracked is False
 
 
 def _prose(text: str) -> str:
@@ -336,6 +354,12 @@ def _render_inspection(result: Inspection) -> None:
         )
     elif result.tracked_by_git:
         console.print("  tracked by git")
+    if result.signals_conflict:
+        console.print(
+            "  [yellow]signals conflict[/yellow] — the repo's own text claims this document "
+            "while git does not track it. That is [bold]not decidable from the evidence[/bold]: "
+            "ask whether the repo is meant to own it."
+        )
     console.print(f"  outbound relative links: {len(result.outbound_relative)} resolving")
     for reference in result.outbound_relative:
         console.print(f"    [cyan]{result.path}:{reference.line}[/cyan]  {reference.path}")
@@ -492,6 +516,7 @@ def _move_one(spec: dict[str, Any], vault: Path, dry_run: bool) -> dict[str, Any
     if note:
         fields["note"] = note
     text = schema.render_article(fields, rewritten)
+    backlinks = write_backlinks(vault, target, list(related or []), dry_run, resolved_title)
     if not dry_run:
         _guard(target)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -507,6 +532,7 @@ def _move_one(spec: dict[str, Any], vault: Path, dry_run: bool) -> dict[str, Any
         "target": str(target),
         "source_action": source.value,
         "links_absolutised": [asdict(reference) for reference in rewrites],
+        "backlinks": backlinks,
         "dry_run": dry_run,
         "article": text,
     }
@@ -551,6 +577,7 @@ def point(
             "target": str(target),
             "source_action": SourceAction.KEEP.value,
             "links_absolutised": [],
+            "backlinks": write_backlinks(vault, target, list(related or []), dry_run, resolved_title),
             "dry_run": dry_run,
         }
         if not dry_run:
@@ -685,6 +712,8 @@ def _report(plan: dict[str, Any], text: str, as_json: bool, dry_run: bool, verbo
         console.print(f"  absolutised {len(plan['links_absolutised'])} relative link(s):")
         for reference in plan["links_absolutised"]:
             console.print(f"    [cyan]{plan['source']}:{reference['line']}[/cyan]  {reference['path']}")
+    for other in plan.get("backlinks", []):
+        console.print(f"  {'would add' if dry_run else 'added'} the reverse link in [bold]{other}[/bold]")
     if plan["source_action"] == SourceAction.SYMLINK.value:
         console.print(f"  {'would replace' if dry_run else 'replaced'} {plan['source']} with a symlink to it")
         console.print("  [dim]note: git stores a symlink as a path string, not content[/dim]")
