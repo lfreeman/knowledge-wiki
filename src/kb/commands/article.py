@@ -42,6 +42,10 @@ def new(
     tickets: Annotated[list[str] | None, typer.Option("--ticket", help="Repeatable.")] = None,
     related: Annotated[list[str] | None, typer.Option("--related", help="[[path/slug|Title]]. Repeatable.")] = None,
     sources: Annotated[list[str] | None, typer.Option("--source", help="Raw entry id. Repeatable.")] = None,
+    sessions: Annotated[
+        list[str] | None,
+        typer.Option("--session", help="Claude Code session id, or a transcript path. Repeatable."),
+    ] = None,
     path: Annotated[str | None, typer.Option("--path", help="Required for a reference article.")] = None,
     dry_run: DryRunOption = True,
     as_json: JsonOption = False,
@@ -72,8 +76,12 @@ def new(
             "systems": systems or None,
             "related": related if related is not None else [],
             "sources": sources or None,
+            "sessions": [_session_path(entry) for entry in sessions] if sessions else None,
             "path": path,
         }
+        for entry in fields["sessions"] or []:
+            if not Path(entry).expanduser().is_file():
+                console.print(f"[yellow]warning:[/yellow] no transcript at {entry} — it may be on another machine")
         body = body_file.expanduser().read_text(encoding="utf-8") if body_file else f"# {title}\n"
         text = schema.render_article({k: v for k, v in fields.items() if v is not None}, body)
         overlap = _overlapping(vault, fields, skip=slug)
@@ -272,6 +280,19 @@ def write_backlinks(vault: Path, target: Path, related: list[str], dry_run: bool
         if _add_related(other, target, vault, dry_run, title):
             written.append(slug)
     return written
+
+
+def _session_path(value: str) -> str:
+    """Resolve a `--session` value to a Claude Code transcript path.
+
+    A bare id is expanded against the working directory, because that is the half
+    `claude --resume` cannot infer: transcripts are filed under the directory the session
+    ran in, with every slash turned into a dash. Anything already path-shaped is kept as
+    given, so a transcript from another machine survives verbatim.
+    """
+    if "/" in value or value.endswith(".jsonl"):
+        return value
+    return f"~/.claude/projects/{str(Path.cwd()).replace('/', '-')}/{value}.jsonl"
 
 
 def _wikilink(vault: Path, target: Path, title: str | None = None) -> str:

@@ -246,3 +246,12 @@ def test_the_gaps_inbox_is_still_found_when_you_search_for_it(article: ArticleWr
     article(schema.GAPS_SLUG, title="Learning Gaps", status="active", body="- g-0001 something\n")
     article("guides/other", title="Unrelated Guide", body="A note about gaps in coverage.\n")
     assert find(vault, ["learning gaps"])[0].slug == schema.GAPS_SLUG
+
+
+def test_a_quoted_phrase_is_counted_as_its_words_in_the_output(article: ArticleWriter, vault: Path) -> None:
+    # Splitting the phrase for matching but not for reporting once printed "2/1 terms".
+    article("guides/benchmark", title="Proximity Benchmark", body="Measured under heavy load.\n")
+    result = runner.invoke(app, ["search", "proximity load"])
+    assert "2/2 terms" in result.output
+    payload = json.loads(runner.invoke(app, ["search", "proximity load", "--json"]).output)
+    assert payload["terms"] == ["proximity", "load"]

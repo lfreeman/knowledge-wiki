@@ -359,6 +359,38 @@ def test_touch_says_so_when_the_date_is_already_current(article: ArticleWriter) 
     assert "->" not in result.output
 
 
+def test_new_expands_a_bare_session_id_into_a_transcript_path(vault: Path) -> None:
+    # `claude --resume` only works from the session's own directory, so the stored value
+    # has to carry it: the folder is the working directory with its slashes turned to dashes.
+    runner.invoke(
+        app,
+        ["article", "new", "research/fresh", "--title", "F", "--summary", "S",
+         "--session", "abc-123", "--no-dry-run"],
+    )
+    (session,) = schema.parse_article(vault / "research" / "fresh.md", vault).list_field("sessions")
+    assert session.startswith("~/.claude/projects/")
+    assert session.endswith("/abc-123.jsonl")
+
+
+def test_new_keeps_a_session_path_as_it_was_given(vault: Path) -> None:
+    given = "~/.claude/projects/-Users-someone-workspace-a-repo/abc-123.jsonl"
+    runner.invoke(
+        app,
+        ["article", "new", "research/fresh", "--title", "F", "--summary", "S",
+         "--session", given, "--no-dry-run"],
+    )
+    assert schema.parse_article(vault / "research" / "fresh.md", vault).list_field("sessions") == [given]
+
+
+def test_new_warns_when_the_transcript_is_not_on_this_machine(vault: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["article", "new", "research/fresh", "--title", "F", "--summary", "S", "--session", "abc-123"],
+    )
+    assert result.exit_code == 0
+    assert "no transcript at" in result.output
+
+
 def test_tag_adds_values_to_an_existing_article(article: ArticleWriter, vault: Path) -> None:
     article("systems/a", systems=["Athena"])
     runner.invoke(app, ["article", "tag", "systems/a", "--system", "geohash", "--repo", "some-service",

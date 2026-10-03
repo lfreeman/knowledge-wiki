@@ -306,6 +306,10 @@ def test_doctor_warns_when_the_repo_root_is_missing(tmp_path: Path, monkeypatch:
     assert finding["status"] == "warn"
 
 
+#: Commands from other tools the skills are allowed to document, whose flags are not kb's.
+FOREIGN_COMMANDS: tuple[str, ...] = ("claude",)
+
+
 def test_no_skill_documents_an_option_that_does_not_exist() -> None:
     """The skills publish exhaustive option tables, which go stale the moment a flag moves.
 
@@ -326,6 +330,11 @@ def test_no_skill_documents_an_option_that_does_not_exist() -> None:
 
     for name in config.SKILL_NAMES:
         text = (config.skill_source(name) / "SKILL.md").read_text()
+        # A skill may legitimately document another tool's command — `claude --resume` for
+        # reopening a session. Those flags belong to that tool, so drop each foreign command
+        # and its arguments before scanning what is left for kb's.
+        for command in FOREIGN_COMMANDS:
+            text = re.sub(rf"{command} [^\n`]*", "", text)
         # Only flags written as code spans in the option tables and examples.
         used = set(re.findall(r"`(--[a-z][a-z0-9-]*)`", text))
         used |= set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", text))

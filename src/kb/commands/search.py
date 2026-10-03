@@ -89,12 +89,15 @@ def search(
         vault = config.load_config().vault
         if not vault.is_dir():
             raise VaultNotFoundError(f"no vault at {vault}; run `kb init` or set KB_VAULT")
-        found = find(vault, terms)
+        # Split here as well as in find(), so what is counted and what is reported are
+        # the same list: reporting the raw arguments once printed a match as "2/1 terms".
+        words = _words(terms)
+        found = find(vault, words)
         matches = found[:limit]
         if as_json:
             emit_json(
                 {
-                    "terms": terms,
+                    "terms": words,
                     "matches": [asdict(match) for match in matches],
                     "count": len(matches),
                     "total": len(found),
@@ -102,7 +105,18 @@ def search(
                 }
             )
             return
-        _render(matches, terms, vault)
+        _render(matches, words, vault)
+
+
+def _words(terms: list[str]) -> list[str]:
+    """Every search word, in order, deduped.
+
+    A term may arrive quoted — `kb search "proximity benchmark"` — and a phrase that only
+    matches where its words sit adjacent fails closed, which reads exactly like nothing
+    covering the subject. Deduped because splitting makes an accidental repeat likely,
+    and a repeat would otherwise count twice towards a match's rank.
+    """
+    return list(dict.fromkeys(word for term in terms for word in term.lower().split()))
 
 
 def _stem(word: str) -> str:
@@ -140,7 +154,7 @@ def find(vault: Path, terms: list[str]) -> list[Match]:
     terms appeared; ties break on slug so the order is stable between runs. The one
     exception is the gaps inbox matched only in its body — see `inbox_mention`.
     """
-    wanted = list(dict.fromkeys(word for term in terms for word in term.lower().split()))
+    wanted = _words(terms)
     if not wanted:
         return []
     articles, _ = schema.load_vault(vault)

@@ -65,6 +65,7 @@ repos: [some-service]
 systems: [ComponentName, some_table, some_metric]
 related: ["[[runbooks/some-slug|Some Article Title]]"]
 sources: ["entry-id-1", "entry-id-2"]
+sessions: ["~/.claude/projects/<cwd-with-slashes-as-dashes>/<session-id>.jsonl"]
 path: <only for type: reference — where the real document lives>
 note: <optional free text about the article's placement>
 ---
@@ -88,6 +89,7 @@ note: <optional free text about the article's placement>
 | `tickets` / `repos` / `systems` | Flat lists of bare identifiers. `repos` is what makes an article auto-checkable — see §8. |
 | `related` | List of quoted wikilinks in full `[[path/slug\|Title]]` form. Add links in **both** directions. |
 | `sources` | Raw entry IDs, never file paths. |
+| `sessions` | Claude Code transcript paths, for reopening the dialog the article was written in. Never a bare id — `claude --resume` only works from the session's own directory, and the path carries it. |
 | `path` | Absolute or `~`-relative path to the real document. `reference/` only. |
 
 ### `status: superseded`

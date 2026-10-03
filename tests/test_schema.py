@@ -121,6 +121,8 @@ def test_the_type_vocabulary_matches_the_shipped_schema_document() -> None:
         assert value in text, f"SCHEMA.md does not mention the {value} type"
     for name in schema.REQUIRED_FIELDS:
         assert name in text, f"SCHEMA.md does not mention the required field {name}"
+    for name in schema.LIST_FIELDS:
+        assert f"`{name}`" in text, f"SCHEMA.md does not document the list field {name}"
 
 
 def test_bash_test_syntax_in_a_code_block_is_not_a_wikilink() -> None:

@@ -61,6 +61,19 @@ the summaries of everything that comes back.
    run earlier in the session cannot see what landed since. If one of them should have been
    updated instead, stop and update it.
 
+   **Record the session.** Pass `--session` with the id of the session you are in, so the
+   article can be read alongside the dialog that produced it — the commands that were run,
+   the output you were looking at, the dead ends the article does not mention. Find the id
+   with:
+
+   ```bash
+   ls -t ~/.claude/projects/"$(pwd | tr '/' '-')"/*.jsonl | head -1 | xargs basename | sed 's/\.jsonl$//'
+   ```
+
+   That is the transcript for this working directory that was written to most recently,
+   which is the one you are in. Reopen it later with `claude --resume <id>`, run from that
+   same directory. The transcript stays where it is — **never copy one into the vault.**
+
    **Never hand-edit frontmatter arrays.** They are single long lines of flow-style YAML.
    `--related` writes the reverse link into the other article for you, `kb article link` is
    safe to run afterwards because it de-duplicates, and `kb article tag` adds or removes
@@ -281,7 +294,7 @@ takes `--json`.
 
 | Command | Arguments | Options |
 |---|---|---|
-| `kb article new` | `<dir>/<slug>` | `--title` `--summary` `--type` `--status` `--created` `--body-file` `--path` · repeatable: `--repo` `--system` `--ticket` `--related` `--source` |
+| `kb article new` | `<dir>/<slug>` | `--title` `--summary` `--type` `--status` `--created` `--body-file` `--path` · repeatable: `--repo` `--system` `--ticket` `--related` `--source` `--session` |
 | `kb article link` | `<slug> <slug>` | `--one-way` |
 | `kb article tag` | `<slug>…` | `--system` `--repo` `--ticket` (all repeatable) · `--remove` |
 | `kb article touch` | `<slug>…` | `--on` |

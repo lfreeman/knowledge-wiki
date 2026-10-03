@@ -65,7 +65,7 @@ REQUIRED_FIELDS: tuple[str, ...] = ("title", "type", "status", "created", "last_
 DATE_FIELDS: tuple[str, ...] = ("created", "last_updated")
 
 #: Fields that must be a list of strings when present.
-LIST_FIELDS: tuple[str, ...] = ("tickets", "repos", "systems", "related", "sources")
+LIST_FIELDS: tuple[str, ...] = ("tickets", "repos", "systems", "related", "sources", "sessions")
 
 INDEX_FILE = "_index.md"
 BACKLINKS_FILE = "_backlinks.json"
@@ -310,6 +310,7 @@ FIELD_ORDER: tuple[str, ...] = (
     "systems",
     "related",
     "sources",
+    "sessions",
     "path",
     "note",
 )
