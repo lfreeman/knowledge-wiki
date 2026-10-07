@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import unquote
 
 import typer
 
@@ -121,10 +122,12 @@ def check(
         findings += _reference(article, vault)
         findings += _links(article, vault, known)
         findings += _cited_paths(article, vault, home)
+        findings += _images(article, vault)
         findings += _placement(article, vault)
         findings += _staleness(article, vault, stale_months, today)
     findings += _duplicate_titles(articles, vault)
     findings += _orphans(articles, vault)
+    findings += _assets(articles, vault)
     return sorted(findings, key=lambda finding: (finding.path, finding.line, finding.rule))
 
 
@@ -198,6 +201,18 @@ def _links(article: schema.Article, vault: Path, known: set[str]) -> list[Findin
     findings: list[Finding] = []
     for link in article.links():
         line = link.line or 1
+        if link.is_bare and _resolves(link.target, vault, known):
+            findings.append(
+                Finding(
+                    "link-missing-title",
+                    WARN,
+                    where,
+                    line,
+                    f"{link.raw} has no display title, so it renders as the bare path; "
+                    f"use [[{link.target}|Display Title]]",
+                )
+            )
+            continue
         if link.is_bare:
             findings.append(
                 Finding(
@@ -219,9 +234,104 @@ def _links(article: schema.Article, vault: Path, known: set[str]) -> list[Findin
                     f"{link.raw} splits across two cells in a table row; escape the pipe as \\|",
                 )
             )
-        target = link.target.split("#")[0].removesuffix(".md")
-        if target and target not in known and not (vault / f"{target}.md").exists():
+        if not _resolves(link.target, vault, known):
             findings.append(Finding("link-broken", ERROR, where, line, f"{link.raw} points at no such article"))
+    return findings
+
+
+def _resolves(target: str, vault: Path, known: set[str]) -> bool:
+    """Whether a link target, heading and `.md` stripped, names an article that exists."""
+    slug = target.split("#")[0].removesuffix(".md")
+    return not slug or slug in known or (vault / f"{slug}.md").exists()
+
+
+#: Alt text Obsidian reads as a size: `![100](x)`, `![a|100](x)`, `![a|100x50](x)`.
+_SIZE_ALT = re.compile(r"(?:^|\|)\s*\d+(?:x\d+)?\s*$")
+
+
+def _images(article: schema.Article, vault: Path) -> list[Finding]:
+    """Image links that render wrong, point at nothing, or sit outside the article's assets folder."""
+    where = _relative(article.path, vault)
+    home = article.path.parent / schema.ASSETS_DIRECTORY / article.path.stem
+    findings: list[Finding] = []
+    for image in article.images():
+        if _SIZE_ALT.search(image.alt):
+            findings.append(
+                Finding(
+                    "image-numeric-alt",
+                    ERROR,
+                    where,
+                    image.line,
+                    f"{image.raw}: Obsidian reads a number in the alt text as a width; use words",
+                )
+            )
+        if image.embed:
+            findings.append(
+                Finding(
+                    "image-embed",
+                    WARN,
+                    where,
+                    image.line,
+                    f"{image.raw} renders only in Obsidian and resolves by filename; "
+                    "use ![Fig NN: words](assets/<slug>/NN-name.png)",
+                )
+            )
+            continue
+        if image.is_remote:
+            continue
+        target = (article.path.parent / unquote(image.src)).resolve()
+        if not target.exists():
+            findings.append(Finding("image-missing", ERROR, where, image.line, f"{image.src} does not exist"))
+        elif not target.is_relative_to(home.resolve()):
+            findings.append(
+                Finding(
+                    "image-outside-assets",
+                    WARN,
+                    where,
+                    image.line,
+                    f"{image.src} is not under {_relative(home, vault)}/",
+                )
+            )
+    return findings
+
+
+def _assets(articles: list[schema.Article], vault: Path) -> list[Finding]:
+    """Asset files nothing references, and asset folders whose article does not exist.
+
+    Needs every article's image links first, so it runs once over the vault rather than
+    per article. An embed counts as a reference to any asset with that filename, because
+    that is how Obsidian resolves it.
+    """
+    referenced: set[Path] = set()
+    embedded: set[str] = set()
+    for article in articles:
+        for image in article.images():
+            if image.embed:
+                embedded.add(Path(image.src).name)
+            elif not image.is_remote:
+                referenced.add((article.path.parent / unquote(image.src)).resolve())
+    findings: list[Finding] = []
+    for folder in sorted(vault.rglob(schema.ASSETS_DIRECTORY)):
+        relative = folder.relative_to(vault)
+        if not folder.is_dir() or any(part.startswith(".") for part in relative.parts):
+            continue
+        for owned in sorted(path for path in folder.iterdir() if path.is_dir()):
+            if not (folder.parent / f"{owned.name}.md").exists():
+                findings.append(
+                    Finding(
+                        "asset-folder-no-article",
+                        WARN,
+                        _relative(owned, vault),
+                        0,
+                        f"no article {_relative(folder.parent / owned.name, vault)}.md owns this folder",
+                    )
+                )
+            for path in sorted(owned.rglob("*")):
+                if path.is_file() and not path.name.startswith("."):
+                    if path.resolve() not in referenced and path.name not in embedded:
+                        findings.append(
+                            Finding("asset-orphan", WARN, _relative(path, vault), 0, "no article references this file")
+                        )
     return findings
 
 

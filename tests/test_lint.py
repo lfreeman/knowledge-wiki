@@ -309,3 +309,117 @@ def test_a_superseded_article_is_never_stale(article: ArticleWriter, vault: Path
 def test_superseded_is_a_valid_status(article: ArticleWriter, vault: Path) -> None:
     article("research/old-plan", status="superseded")
     assert "frontmatter-invalid-status" not in _rules(check(vault), "research/old-plan.md")
+
+
+# --- a path link with no display title ---
+
+
+def test_a_path_link_without_a_title_that_resolves_is_a_warning(article: ArticleWriter, vault: Path) -> None:
+    article("runbooks/target")
+    article("guides/offender", body="See [[runbooks/target]].\n")
+    findings = check(vault)
+    (found,) = [f for f in findings if f.rule == "link-missing-title"]
+    assert found.severity == WARN
+    assert "[[runbooks/target|Display Title]]" in found.detail
+    assert not [f for f in findings if f.rule in {"link-bare-title", "link-broken"}]
+
+
+def test_a_path_link_without_a_title_that_resolves_nowhere_is_still_an_error(
+    article: ArticleWriter, vault: Path
+) -> None:
+    article("guides/offender", body="See [[runbooks/never-written]].\n")
+    assert "link-bare-title" in _rules(check(vault), "guides/offender.md")
+
+
+# --- images ---
+
+
+def _asset(vault: Path, relative: str) -> Path:
+    path = vault / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x89PNG")
+    return path
+
+
+def test_a_well_formed_image_is_clean(article: ArticleWriter, vault: Path) -> None:
+    _asset(vault, "incidents/assets/2026-01-01-thing/01-rate.png")
+    article("incidents/2026-01-01-thing", body="![Fig 01: rate](assets/2026-01-01-thing/01-rate.png)\n")
+    assert not [f for f in check(vault) if f.rule.startswith(("image-", "asset-"))]
+
+
+def test_it_finds_a_missing_image(article: ArticleWriter, vault: Path) -> None:
+    article("incidents/2026-01-01-thing", body="![Fig 01: rate](assets/2026-01-01-thing/01-rate.png)\n")
+    (found,) = [f for f in check(vault) if f.rule == "image-missing"]
+    assert found.severity == ERROR
+
+
+def test_a_numeric_alt_text_is_an_error(article: ArticleWriter, vault: Path) -> None:
+    _asset(vault, "incidents/assets/2026-01-01-thing/01-rate.png")
+    body = (
+        "![01](assets/2026-01-01-thing/01-rate.png)\n\n"
+        "![rate|200](assets/2026-01-01-thing/01-rate.png)\n\n"
+        "![rate|200x100](assets/2026-01-01-thing/01-rate.png)\n"
+    )
+    article("incidents/2026-01-01-thing", body=body)
+    found = [f for f in check(vault) if f.rule == "image-numeric-alt"]
+    assert len(found) == 3
+    assert all(f.severity == ERROR for f in found)
+
+
+def test_a_number_inside_words_is_not_a_width(article: ArticleWriter, vault: Path) -> None:
+    _asset(vault, "incidents/assets/2026-01-01-thing/01-rate.png")
+    article("incidents/2026-01-01-thing", body="![Fig 01: rate over 6h](assets/2026-01-01-thing/01-rate.png)\n")
+    assert "image-numeric-alt" not in _rules(check(vault))
+
+
+def test_an_image_inside_code_is_not_checked(article: ArticleWriter, vault: Path) -> None:
+    body = "```markdown\n![01](assets/nowhere.png)\n```\n\nWrite `![01](x.png)` never.\n"
+    article("incidents/2026-01-01-thing", body=body)
+    assert not [f for f in check(vault) if f.rule.startswith("image-")]
+
+
+def test_a_remote_image_is_not_checked_for_a_file(article: ArticleWriter, vault: Path) -> None:
+    article("guides/ok", body="![Fig 01: diagram](https://example.com/diagram.png)\n")
+    assert not [f for f in check(vault) if f.rule.startswith("image-")]
+
+
+def test_an_image_outside_the_articles_assets_folder_is_a_warning(article: ArticleWriter, vault: Path) -> None:
+    _asset(vault, "inbox/pasted.png")
+    article("guides/ok", body="![Fig 01: pasted](../inbox/pasted.png)\n")
+    (found,) = [f for f in check(vault) if f.rule == "image-outside-assets"]
+    assert found.severity == WARN
+    assert "guides/assets/ok/" in found.detail
+
+
+def test_an_image_embed_is_a_warning_not_a_broken_wikilink(article: ArticleWriter, vault: Path) -> None:
+    _asset(vault, "guides/assets/ok/01-a.png")
+    article("guides/ok", body="![[01-a.png]]\n")
+    findings = check(vault)
+    assert "image-embed" in _rules(findings)
+    assert not [f for f in findings if f.rule.startswith("link-") or f.rule == "asset-orphan"]
+
+
+def test_an_embed_with_a_width_is_also_a_numeric_alt(article: ArticleWriter, vault: Path) -> None:
+    article("guides/ok", body="![[01-a.png|300]]\n")
+    assert "image-numeric-alt" in _rules(check(vault))
+
+
+def test_it_finds_an_orphan_asset(article: ArticleWriter, vault: Path) -> None:
+    _asset(vault, "incidents/assets/2026-01-01-thing/01-rate.png")
+    _asset(vault, "incidents/assets/2026-01-01-thing/02-unused.png")
+    article("incidents/2026-01-01-thing", body="![Fig 01: rate](assets/2026-01-01-thing/01-rate.png)\n")
+    (found,) = [f for f in check(vault) if f.rule == "asset-orphan"]
+    assert found.path == "incidents/assets/2026-01-01-thing/02-unused.png"
+    assert found.severity == WARN
+
+
+def test_it_finds_an_asset_folder_with_no_article(vault: Path) -> None:
+    _asset(vault, "incidents/assets/never-written/01-a.png")
+    (found,) = [f for f in check(vault) if f.rule == "asset-folder-no-article"]
+    assert found.path == "incidents/assets/never-written"
+
+
+def test_an_assets_folder_is_not_an_article_directory(article: ArticleWriter, vault: Path) -> None:
+    _asset(vault, "incidents/assets/2026-01-01-thing/01-rate.png")
+    article("incidents/2026-01-01-thing", body="![Fig 01: rate](assets/2026-01-01-thing/01-rate.png)\n")
+    assert not [f for f in check(vault) if "assets" in f.path and f.rule != "asset-orphan"]

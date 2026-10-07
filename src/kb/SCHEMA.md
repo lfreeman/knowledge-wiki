@@ -31,6 +31,8 @@ kb schema --path   # print where it lives
   research/                 open investigations, reading notes, comparisons
   journal/                  dated entries synthesized from a journal corpus
   reference/                pointer articles → documents that stay in their own repo
+  <dir>/assets/<slug>/      images belonging to the article <dir>/<slug>.md
+  inbox/                    unprocessed pastes from an editor, not yet filed
 ```
 
 A **topic** under `learning/` is one article that grows. It starts as a list of what is
@@ -44,6 +46,29 @@ next to their code and therefore stay in the repo; `guides/` and `learning/` are
 documents that have no other rightful home.
 
 Files beginning with `_` are generated. **Never hand-edit them.** Run `kb index`.
+
+### Images — next to the one article that uses them
+
+An image belongs to one article and lives beside it, at
+`<dir>/assets/<article-slug>/NN-short-name.<ext>` — for example
+`incidents/assets/2026-10-05-some-incident/03-retry-rate-by-participant.png`. `NN` is a
+two-digit order matching the article's figure numbers; `short-name` is lowercase kebab-case
+describing the content, never the screenshot tool's filename. An `assets/` folder holds no
+`.md` files.
+
+Link with **standard markdown, relative to the article**:
+`![Fig 03: retry rate by participant](assets/2026-10-05-some-incident/03-retry-rate-by-participant.png)`.
+
+- **Alt text must contain words.** Obsidian reads a number in the alt text as a width in
+  pixels: `![01](x.png)` renders one pixel wide, and `![a|200](x.png)` 200 wide. Other
+  viewers show the same file at full size, so the defect is invisible outside Obsidian.
+- **Not Obsidian's `![[file.png]]` embed.** It renders only in Obsidian, and resolves by
+  filename, so it can silently pick up a same-named file elsewhere in the vault.
+- **One caption per image:** the query or source, and one line on what to read from it. A
+  screenshot without its query cannot be reproduced.
+
+`inbox/` is where an editor drops a pasted image. It holds unprocessed material only;
+capture moves an image out of it into the article's `assets/` folder.
 
 ---
 
@@ -306,8 +331,13 @@ model and runs on a schedule.
 ### Cheap pass — no model, runs on every capture and in a pre-commit hook
 
 - A bare `[[Display Title]]` wikilink (§4 rule 1)
+- A `[[path/slug]]` link that resolves but has no display title — a warning, since it works
+  and only renders as the raw path
 - An unescaped `|` inside `[[...]]` on a table row (§4 rule 2)
 - A wikilink whose target file does not exist
+- An image whose file does not exist, or whose alt text is only a number or a `|width` (§1 Images)
+- An `![[file.png]]` embed, or an image outside the article's own `assets/<slug>/` folder — warnings
+- An asset file no article references, or an `assets/<slug>/` folder with no `<slug>.md` beside it
 - A `reference/` article whose `path:` target does not exist
 - A file the article cites by path, under your home directory, that is no longer there
 - Missing required frontmatter field (§2)

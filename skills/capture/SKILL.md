@@ -78,11 +78,24 @@ the summaries of everything that comes back.
    `--related` writes the reverse link into the other article for you, `kb article link` is
    safe to run afterwards because it de-duplicates, and `kb article tag` adds or removes
    `systems:`, `repos:` and `tickets:` on articles that already exist.
-5. **Show the user the preview and wait.** They approve before anything is written.
-6. **Write**, then run `kb index` and `kb lint`. **`kb index` takes no `--no-dry-run`** —
+5. **Choose the screenshots**, if the session has any — `[Image: source: <path>]` lines in
+   the transcript, or files the user names. Nothing is copied yet; this step only decides.
+   - Check each source file still exists. Screenshot tools clean up their folders.
+   - Drop duplicates: the same query over an overlapping or shorter window, a version
+     superseded by a corrected query, two identical charts. Keep the most complete one, and
+     say in the article how many were left out and why.
+   - Drop screenshots from other days or other work that happen to sit in the same folder.
+   - Name the keepers `NN-short-name.png` in the order the article uses them, and link each as
+     `![Fig NN: words](assets/<slug>/NN-short-name.png)` with a caption holding the exact
+     query and one line on how to read it. **The alt text must be words** — see *Images*.
+6. **Show the user the preview and wait.** They approve before anything is written. If there
+   are screenshots, the preview says so: "N images to copy to `<dir>/assets/<slug>/`, M left
+   out as duplicates."
+7. **Write**, and copy (never move) the chosen screenshots to `<vault>/<dir>/assets/<slug>/`
+   under their new names. Then run `kb index` and `kb lint`. **`kb index` takes no `--no-dry-run`** —
    it regenerates derived data and writes by default, unlike every other write command.
    `lint` is cheap and catches the link mistakes that are invisible in raw markdown.
-7. **Close the gaps this answered.** Capture is the moment the inbox should shrink, and it
+8. **Close the gaps this answered.** Capture is the moment the inbox should shrink, and it
    is the step most likely to be skipped because the writing already feels finished. Run
    `kb gap list --state open --json` and look for gaps the new article answers — they are
    often ones logged earlier in this very session.
@@ -99,7 +112,7 @@ the summaries of everything that comes back.
    published document, a card deck, or a conversation the user worked through. Close it, and
    put the real location in `--note` — a URL or a deck name instead of a wikilink. What
    matters is that a future reader can find what answered it.
-8. **Fix what lint reports** before finishing. A finding you leave behind is one the user
+9. **Fix what lint reports** before finishing. A finding you leave behind is one the user
    inherits.
 
 ---
@@ -123,6 +136,17 @@ the vault root when clicked. It looks right in the raw markdown, which is why it
 
 `kb lint` checks all four, reporting the last as `link-broken`. Run it — and never skip it
 after an adoption, which is the step most likely to have moved a slug out from under a link.
+
+---
+
+## Images — a number in the alt text is a width
+
+Obsidian reads `![01](x.png)` as "one pixel wide", and `![chart|200](x.png)` as 200 wide.
+VS Code shows the same file at full size, so it looks fine everywhere but the one place the
+user reads the vault. Always `![Fig 01: what it shows](assets/<slug>/01-short-name.png)`:
+standard markdown, relative to the article, words in the alt text. Never the `![[...]]`
+embed. The full rule is in `SCHEMA.md` §1 *Images*; `kb lint` reports `image-numeric-alt`,
+`image-missing`, `image-embed`, `image-outside-assets` and `asset-orphan`.
 
 ---
 

@@ -72,9 +72,21 @@ BACKLINKS_FILE = "_backlinks.json"
 ABSORB_LOG_FILE = "_absorb_log.json"
 GENERATED_FILES: tuple[str, ...] = (INDEX_FILE, BACKLINKS_FILE, ABSORB_LOG_FILE)
 
+#: Where an article's images live: `<article-dir>/assets/<article-slug>/`.
+ASSETS_DIRECTORY = "assets"
+
+#: Suffixes that make an `![[...]]` embed an image rather than an embedded note.
+IMAGE_SUFFIXES: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".bmp"})
+
 #: `[[...]]` with no nested brackets. The inner text is split on the pipe afterwards,
 #: because the escaped form `\|` has to be told apart from the bare one.
 _WIKILINK = re.compile(r"\[\[(?P<inner>[^\[\]]+)\]\]")
+
+#: A standard markdown image, `![alt](src)` with an optional `"title"`.
+_IMAGE = re.compile(r'!\[(?P<alt>[^\]]*)\]\((?P<src>[^)\s]+)(?:\s+"[^"]*")?\)')
+
+#: Obsidian's embed, `![[file.png]]`, which resolves by filename anywhere in the vault.
+_EMBED = re.compile(r"!\[\[(?P<inner>[^\[\]]+)\]\]")
 
 
 @dataclass(frozen=True)
@@ -92,6 +104,22 @@ class WikiLink:
     def is_bare(self) -> bool:
         """True when the link carries no path — `[[Display Title]]`, which resolves to nothing."""
         return self.alias is None
+
+
+@dataclass(frozen=True)
+class ImageLink:
+    """One image reference: `![alt](src)`, or an `![[file.png]]` embed when `embed` is set."""
+
+    alt: str
+    src: str
+    raw: str
+    line: int
+    embed: bool
+
+    @property
+    def is_remote(self) -> bool:
+        """True for a URL or inline data, which has no file in the vault to check."""
+        return "://" in self.src or self.src.startswith("data:")
 
 
 @dataclass(frozen=True)
@@ -170,6 +198,31 @@ class Article:
         found.extend(wikilinks(self.body, line_offset=self.body_offset))
         return found
 
+    def images(self) -> list[ImageLink]:
+        """Every image the body references, standard links and embeds alike."""
+        return images(self.body, line_offset=self.body_offset)
+
+
+def _prose_lines(text: str) -> Iterator[tuple[int, str]]:
+    """Each line outside code, numbered from 1, with inline code spans removed.
+
+    Fenced blocks, indented blocks and inline spans are skipped, so an example of a link
+    written inside code is never mistaken for a link.
+    """
+    fenced = False
+    for number, raw in enumerate(text.splitlines(), start=1):
+        stripped = raw.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fenced = not fenced
+            continue
+        if fenced or raw.startswith("    ") or raw.startswith("\t"):
+            continue
+        yield number, re.sub(r"`[^`]*`", "", raw)
+
+
+def _is_image_embed(target: str) -> bool:
+    return Path(target.replace("\\|", "|").split("|")[0].strip()).suffix.lower() in IMAGE_SUFFIXES
+
 
 def wikilinks(text: str, line: int | None = None, line_offset: int = 0) -> list[WikiLink]:
     """Every `[[...]]` in `text`, with its line number and table context.
@@ -181,20 +234,16 @@ def wikilinks(text: str, line: int | None = None, line_offset: int = 0) -> list[
     `line` pins every result to one line number, for text that did not come from the
     body (a `related:` entry). `line_offset` shifts body line numbers so they point at
     the real position in the file.
+
+    An `![[file.png]]` image embed is not a link to an article and is left to `images`.
     """
     results: list[WikiLink] = []
-    fenced = False
-    for number, raw in enumerate(text.splitlines(), start=1):
-        stripped = raw.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            fenced = not fenced
-            continue
-        if fenced or raw.startswith("    ") or raw.startswith("\t"):
-            continue
-        content = re.sub(r"`[^`]*`", "", raw)
+    for number, content in _prose_lines(text):
         in_table_row = content.lstrip().startswith("|")
         for match in _WIKILINK.finditer(content):
             inner = match.group("inner")
+            if content[: match.start()].endswith("!") and _is_image_embed(inner):
+                continue
             if "\\|" in inner:
                 target, _, alias = inner.partition("\\|")
                 escaped = True
@@ -212,6 +261,35 @@ def wikilinks(text: str, line: int | None = None, line_offset: int = 0) -> list[
                     escaped=escaped,
                     in_table_row=in_table_row,
                 )
+            )
+    return results
+
+
+def images(text: str, line_offset: int = 0) -> list[ImageLink]:
+    """Every image in `text`: `![alt](src)` links, and `![[...]]` embeds of an image file.
+
+    Code is skipped the same way `wikilinks` skips it. An embed's `src` is the bare
+    filename and its `alt` whatever follows the pipe, which is where Obsidian puts a width.
+    """
+    results: list[ImageLink] = []
+    for number, content in _prose_lines(text):
+        for match in _IMAGE.finditer(content):
+            results.append(
+                ImageLink(
+                    alt=match.group("alt"),
+                    src=match.group("src"),
+                    raw=match.group(0),
+                    line=number + line_offset,
+                    embed=False,
+                )
+            )
+        for match in _EMBED.finditer(content):
+            inner = match.group("inner")
+            if not _is_image_embed(inner):
+                continue
+            src, _, alt = inner.replace("\\|", "|").partition("|")
+            results.append(
+                ImageLink(alt=alt.strip(), src=src.strip(), raw=match.group(0), line=number + line_offset, embed=True)
             )
     return results
 

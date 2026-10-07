@@ -147,3 +147,25 @@ def test_a_real_wikilink_beside_a_code_block_still_counts() -> None:
 
 def test_a_tilde_fenced_block_is_skipped_too() -> None:
     assert schema.wikilinks('~~~sh\n[[ "$p" == "1" ]]\n~~~\n') == []
+
+
+def test_an_image_link_yields_alt_and_src() -> None:
+    (image,) = schema.images('Text ![Fig 01: rate](assets/a/01-rate.png "title") more.')
+    assert (image.alt, image.src, image.embed) == ("Fig 01: rate", "assets/a/01-rate.png", False)
+
+
+def test_an_image_embed_is_an_image_and_not_a_wikilink() -> None:
+    text = "![[01-rate.png|200]] and ![[runbooks/a|A]]"
+    (image,) = schema.images(text)
+    assert (image.src, image.alt, image.embed) == ("01-rate.png", "200", True)
+    assert [link.target for link in schema.wikilinks(text)] == ["runbooks/a"]
+
+
+def test_an_image_in_code_is_not_an_image() -> None:
+    assert schema.images("```\n![01](x.png)\n```\n\n    ![01](y.png)\n\n`![01](z.png)`\n") == []
+
+
+def test_image_line_numbers_point_at_the_real_file_position(article: ArticleWriter, vault: Path) -> None:
+    parsed = schema.parse_article(article("guides/a", body="Intro.\n\n![Fig 01: x](assets/a/01-x.png)\n"), vault)
+    (image,) = parsed.images()
+    assert parsed.path.read_text().splitlines()[image.line - 1].startswith("![Fig 01")
