@@ -67,7 +67,7 @@ the summaries of everything that comes back.
    with:
 
    ```bash
-   ls -t ~/.claude/projects/"$(pwd | tr '/' '-')"/*.jsonl | head -1 | xargs basename | sed 's/\.jsonl$//'
+   ls -t ~/.claude/projects/"$(pwd | sed 's/[^A-Za-z0-9]/-/g')"/*.jsonl | head -1 | xargs basename | sed 's/\.jsonl$//'
    ```
 
    That is the transcript for this working directory that was written to most recently,
@@ -247,7 +247,7 @@ points out to the vault instead of holding the file.
 only there first.** A folder's own index or conventions file routinely holds content that
 exists nowhere else: which repo owns which spec, the standing assumptions a playbook was
 written against, canonical commit references. Read it before it goes, and fold whatever is
-load-bearing into an article. Both adoption runs so far turned up exactly this.
+load-bearing into an article.
 
 ---
 
